@@ -27,6 +27,7 @@ data class RecordingState(
     val fileName: String,
     val startedAtMillis: Long,
     val pointCount: Int,
+    val paused: Boolean = false,
 )
 
 /**
@@ -40,6 +41,7 @@ class TrackRecorderService : Service(), LocationListener {
     private var writer: GpxWriter? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var requestingUpdates = false
+    private var intervalMillis = DEFAULT_INTERVAL_MILLIS
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -56,16 +58,19 @@ class TrackRecorderService : Service(), LocationListener {
                 stopRecording()
                 return START_NOT_STICKY
             }
+            intent?.action == ACTION_PAUSE -> pauseRecording()
+            intent?.action == ACTION_RESUME -> resumeRecording()
             intent?.action == ACTION_START -> {
                 val interval = intent.getLongExtra(EXTRA_INTERVAL_MILLIS, DEFAULT_INTERVAL_MILLIS)
                     .coerceAtLeast(1000L)
                 val name = sanitize(intent.getStringExtra(EXTRA_FILENAME)) ?: defaultFileName()
                 prefs().edit()
                     .putBoolean(KEY_ACTIVE, true)
+                    .putBoolean(KEY_PAUSED, false)
                     .putLong(KEY_INTERVAL, interval)
                     .putString(KEY_NAME, name)
                     .apply()
-                startRecording(name, interval)
+                startRecording(name, interval, paused = false)
             }
             // Sticky restart after the OS killed the process: resume the last recording.
             intent == null && prefs().getBoolean(KEY_ACTIVE, false) -> {
@@ -73,6 +78,7 @@ class TrackRecorderService : Service(), LocationListener {
                 startRecording(
                     p.getString(KEY_NAME, null) ?: defaultFileName(),
                     p.getLong(KEY_INTERVAL, DEFAULT_INTERVAL_MILLIS),
+                    paused = p.getBoolean(KEY_PAUSED, false),
                 )
             }
             else -> stopSelf()
@@ -80,7 +86,7 @@ class TrackRecorderService : Service(), LocationListener {
         return START_STICKY
     }
 
-    private fun startRecording(name: String, intervalMillis: Long) {
+    private fun startRecording(name: String, intervalMillis: Long, paused: Boolean) {
         if (writer != null) return
 
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -99,12 +105,49 @@ class TrackRecorderService : Service(), LocationListener {
             return
         }
 
+        this.intervalMillis = intervalMillis
+        state.value = RecordingState("$name.gpx", System.currentTimeMillis(), 0, paused)
+
         startForeground(
             NOTIFICATION_ID,
-            buildNotification(name, 0),
+            buildNotification(name, 0, paused),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
         )
 
+        if (!paused) {
+            requestLocationUpdates()
+            acquireWakeLock()
+        }
+    }
+
+    private fun pauseRecording() {
+        val s = state.value ?: return
+        if (writer == null || s.paused) return
+        stopLocationUpdates()
+        releaseWakeLock()
+        prefs().edit().putBoolean(KEY_PAUSED, true).apply()
+        state.value = s.copy(paused = true)
+        updateNotification()
+    }
+
+    private fun resumeRecording() {
+        val s = state.value ?: return
+        val w = writer ?: return
+        if (!s.paused) return
+        try {
+            w.startNewSegment()
+        } catch (_: Exception) {
+            // A failed segment break is non-fatal; keep appending to the old one.
+        }
+        requestLocationUpdates()
+        acquireWakeLock()
+        prefs().edit().putBoolean(KEY_PAUSED, false).apply()
+        state.value = s.copy(paused = false)
+        updateNotification()
+    }
+
+    private fun requestLocationUpdates() {
+        if (requestingUpdates) return
         val request = LocationRequest.Builder(intervalMillis)
             .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
             .setMinUpdateIntervalMillis(intervalMillis)
@@ -112,12 +155,24 @@ class TrackRecorderService : Service(), LocationListener {
         getSystemService(LocationManager::class.java)
             .requestLocationUpdates(LocationManager.GPS_PROVIDER, request, mainExecutor, this)
         requestingUpdates = true
+    }
 
+    private fun stopLocationUpdates() {
+        if (!requestingUpdates) return
+        getSystemService(LocationManager::class.java).removeUpdates(this)
+        requestingUpdates = false
+    }
+
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "geoimport:track-recording")
             .apply { acquire() }
+    }
 
-        state.value = RecordingState("$name.gpx", System.currentTimeMillis(), 0)
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
     }
 
     override fun onLocationChanged(location: Location) {
@@ -128,11 +183,15 @@ class TrackRecorderService : Service(), LocationListener {
             return
         }
         val s = state.value ?: return
-        val updated = s.copy(pointCount = s.pointCount + 1)
-        state.value = updated
+        state.value = s.copy(pointCount = s.pointCount + 1)
+        updateNotification()
+    }
+
+    private fun updateNotification() {
+        val s = state.value ?: return
         getSystemService(NotificationManager::class.java).notify(
             NOTIFICATION_ID,
-            buildNotification(updated.fileName.removeSuffix(".gpx"), updated.pointCount),
+            buildNotification(s.fileName.removeSuffix(".gpx"), s.pointCount, s.paused),
         )
     }
 
@@ -144,12 +203,8 @@ class TrackRecorderService : Service(), LocationListener {
     }
 
     private fun cleanup() {
-        if (requestingUpdates) {
-            getSystemService(LocationManager::class.java).removeUpdates(this)
-            requestingUpdates = false
-        }
-        wakeLock?.let { if (it.isHeld) it.release() }
-        wakeLock = null
+        stopLocationUpdates()
+        releaseWakeLock()
         writer?.let {
             it.close()
             MediaScannerConnection.scanFile(this, arrayOf(it.file.path), null, null)
@@ -163,7 +218,7 @@ class TrackRecorderService : Service(), LocationListener {
         super.onDestroy()
     }
 
-    private fun buildNotification(name: String, points: Int): Notification {
+    private fun buildNotification(name: String, points: Int, paused: Boolean): Notification {
         val stopIntent = PendingIntent.getService(
             this, 1,
             Intent(this, TrackRecorderService::class.java).setAction(ACTION_STOP),
@@ -174,12 +229,23 @@ class TrackRecorderService : Service(), LocationListener {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE,
         )
+        val toggleAction = if (paused) ACTION_RESUME else ACTION_PAUSE
+        val toggleIntent = PendingIntent.getService(
+            this, 3,
+            Intent(this, TrackRecorderService::class.java).setAction(toggleAction),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("Recording GPS track")
+            .setContentTitle(if (paused) "GPS track paused" else "Recording GPS track")
             .setContentText("$name.gpx — $points points")
             .setOngoing(true)
             .setContentIntent(contentIntent)
+            .addAction(
+                Notification.Action.Builder(
+                    null, if (paused) "Resume" else "Pause", toggleIntent,
+                ).build()
+            )
             .addAction(Notification.Action.Builder(null, "Stop", stopIntent).build())
             .build()
     }
@@ -195,6 +261,8 @@ class TrackRecorderService : Service(), LocationListener {
     companion object {
         const val ACTION_START = "com.pbungert.geoimport.action.START_RECORDING"
         const val ACTION_STOP = "com.pbungert.geoimport.action.STOP_RECORDING"
+        const val ACTION_PAUSE = "com.pbungert.geoimport.action.PAUSE_RECORDING"
+        const val ACTION_RESUME = "com.pbungert.geoimport.action.RESUME_RECORDING"
         const val EXTRA_INTERVAL_MILLIS = "interval_millis"
         const val EXTRA_FILENAME = "filename"
         const val DEFAULT_INTERVAL_MINUTES = 1.0
@@ -204,6 +272,7 @@ class TrackRecorderService : Service(), LocationListener {
         private const val NOTIFICATION_ID = 42
         private const val PREFS = "recorder"
         private const val KEY_ACTIVE = "active"
+        private const val KEY_PAUSED = "paused"
         private const val KEY_INTERVAL = "interval"
         private const val KEY_NAME = "name"
 

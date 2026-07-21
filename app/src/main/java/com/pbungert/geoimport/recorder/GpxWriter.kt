@@ -53,6 +53,19 @@ class GpxWriter(val file: File, trackName: String) {
         raf.fd.sync()
     }
 
+    /**
+     * Closes the current track segment and opens a fresh one, so a pause shows
+     * up as a gap between segments instead of a straight line bridging it.
+     */
+    fun startNewSegment() {
+        raf.seek(footerOffset)
+        raf.write(SEGMENT_BREAK)
+        footerOffset += SEGMENT_BREAK.size
+        raf.write(FOOTER)
+        raf.setLength(footerOffset + FOOTER.size)
+        raf.fd.sync()
+    }
+
     fun close() = raf.close()
 
     private fun escapeXml(s: String) =
@@ -65,5 +78,6 @@ class GpxWriter(val file: File, trackName: String) {
             "  <name>%s</name>\n" +
             "  <trkseg>\n"
         val FOOTER = "  </trkseg>\n </trk>\n</gpx>\n".toByteArray(StandardCharsets.UTF_8)
+        val SEGMENT_BREAK = "  </trkseg>\n  <trkseg>\n".toByteArray(StandardCharsets.UTF_8)
     }
 }

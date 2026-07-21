@@ -43,7 +43,9 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SdCard
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
@@ -170,21 +172,27 @@ fun ImportScreen(viewModel: ImportViewModel = viewModel()) {
 @Composable
 private fun RecordingBanner(recording: RecordingState) {
     val context = LocalContext.current
+    fun send(action: String) {
+        context.startService(
+            Intent(context, TrackRecorderService::class.java).setAction(action)
+        )
+    }
     Surface(color = MaterialTheme.colorScheme.primaryContainer) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Icon(
-                Icons.Filled.FiberManualRecord,
+                if (recording.paused) Icons.Filled.Pause else Icons.Filled.FiberManualRecord,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.error,
+                tint = if (recording.paused) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.error,
                 modifier = Modifier.size(16.dp),
             )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "Recording GPS track",
+                    if (recording.paused) "GPS track paused" else "Recording GPS track",
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
@@ -197,11 +205,20 @@ private fun RecordingBanner(recording: RecordingState) {
                 )
             }
             TextButton(onClick = {
-                context.startService(
-                    Intent(context, TrackRecorderService::class.java)
-                        .setAction(TrackRecorderService.ACTION_STOP)
+                send(
+                    if (recording.paused) TrackRecorderService.ACTION_RESUME
+                    else TrackRecorderService.ACTION_PAUSE
                 )
             }) {
+                Icon(
+                    if (recording.paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(if (recording.paused) "Resume" else "Pause")
+            }
+            TextButton(onClick = { send(TrackRecorderService.ACTION_STOP) }) {
                 Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
                 Text("Stop")
