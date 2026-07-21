@@ -25,7 +25,11 @@ class PhotoImporter(
 ) {
     data class ImportResult(val copied: List<File>, val destFolder: File?)
 
-    fun run(startFilename: String?, startTimestamp: LocalDateTime?): ImportResult {
+    fun run(
+        startFilename: String?,
+        startTimestamp: LocalDateTime?,
+        onCopyProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): ImportResult {
         val sourceFiles = collectSourceFiles(sourcePath) ?: return ImportResult(emptyList(), null)
 
         log(
@@ -40,11 +44,14 @@ class PhotoImporter(
 
         val destFolder = createNextImportFolder()
         val copied = mutableListOf<File>()
-        for (file in filesToCopy) {
+        val total = filesToCopy.size
+        onCopyProgress(0, total)
+        for ((index, file) in filesToCopy.withIndex()) {
             log("Copying ${file.name}...")
             val dest = file.copyTo(File(destFolder, file.name), overwrite = false)
             dest.setLastModified(file.lastModified())
             copied.add(dest)
+            onCopyProgress(index + 1, total)
         }
         return ImportResult(copied, destFolder)
     }

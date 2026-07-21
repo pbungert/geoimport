@@ -27,8 +27,13 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -71,6 +76,12 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun ImportScreen(viewModel: ImportViewModel = viewModel()) {
     val context = LocalContext.current
+    var showLog by rememberSaveable { mutableStateOf(false) }
+
+    if (showLog) {
+        LogScreen(viewModel.logLines) { showLog = false }
+        return
+    }
 
     val pickTrack = rememberLauncherForActivityResult(
         OpenTrackDocument()
@@ -78,7 +89,12 @@ fun ImportScreen(viewModel: ImportViewModel = viewModel()) {
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
-        topBar = { TopAppBar(title = { Text("Geoimport") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Geoimport") },
+                actions = { OverflowMenu(onShowLog = { showLog = true }) },
+            )
+        },
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -158,21 +174,136 @@ fun ImportScreen(viewModel: ImportViewModel = viewModel()) {
 
             HorizontalDivider()
 
-            val listState = rememberLazyListState()
-            LaunchedEffect(viewModel.logLines.size) {
-                if (viewModel.logLines.isNotEmpty()) {
-                    listState.animateScrollToItem(viewModel.logLines.size - 1)
+            when (val phase = viewModel.phase) {
+                is Phase.Busy -> ProgressSection(phase)
+                is Phase.Done -> SummaryCard(phase.summary)
+                is Phase.Failed -> FailureCard(phase.message)
+                Phase.Idle -> {}
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProgressSection(phase: Phase.Busy) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        val counts = if (phase.total > 0) " ${phase.current} / ${phase.total}" else "…"
+        Text("${phase.label}$counts", style = MaterialTheme.typography.bodyMedium)
+        if (phase.total > 0) {
+            LinearProgressIndicator(
+                progress = { phase.current.toFloat() / phase.total },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+private fun SummaryCard(summary: ImportSummary) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (summary.copied == 0) {
+                Text("Nothing to import", style = MaterialTheme.typography.titleMedium)
+                return@Column
+            }
+            Text("Import complete", style = MaterialTheme.typography.titleMedium)
+            Text(
+                buildString {
+                    append("${summary.copied} files")
+                    summary.destFolder?.let { append(" → $it") }
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                "${summary.rafCount} RAF · ${summary.movCount} MOV",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            val geotagLine = when {
+                !summary.geotagAttempted -> "No track selected — not geotagged"
+                else -> buildString {
+                    append("Geotagged ${summary.exifTagged + summary.sidecarTagged} of ${summary.copied}")
+                    append(" (${summary.exifTagged} EXIF · ${summary.sidecarTagged} sidecar)")
+                    if (summary.notTagged > 0) append(" · ${summary.notTagged} skipped")
                 }
             }
-            SelectionContainer(modifier = Modifier.weight(1f)) {
-                LazyColumn(state = listState) {
-                    items(viewModel.logLines) { line ->
-                        Text(
-                            line,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                        )
+            Text(geotagLine, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun FailureCard(message: String) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                "Import stopped",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Text(message, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun OverflowMenu(onShowLog: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    IconButton(onClick = { expanded = true }) {
+        // Vertical ellipsis avoids pulling in the material-icons dependency.
+        Text("⋮", style = MaterialTheme.typography.titleLarge)
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenuItem(
+            text = { Text("Import Log") },
+            onClick = {
+                expanded = false
+                onShowLog()
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LogScreen(lines: List<String>, onClose: () -> Unit) {
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        topBar = {
+            TopAppBar(
+                title = { Text("Import Log") },
+                navigationIcon = {
+                    IconButton(onClick = onClose) {
+                        Text("‹", style = MaterialTheme.typography.headlineMedium)
                     }
+                },
+            )
+        },
+    ) { innerPadding ->
+        val listState = rememberLazyListState()
+        LaunchedEffect(lines.size) {
+            if (lines.isNotEmpty()) listState.animateScrollToItem(lines.size - 1)
+        }
+        SelectionContainer(
+            modifier = Modifier
+                .padding(innerPadding)
+                .padding(16.dp)
+                .fillMaxSize(),
+        ) {
+            LazyColumn(state = listState) {
+                items(lines) { line ->
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
                 }
             }
         }
