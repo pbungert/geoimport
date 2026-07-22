@@ -27,16 +27,10 @@ local.properties
 *.log
 
 # Android Studio / IntelliJ IDEA
+# IDE project files churn on their own (indexing, SDK paths, device list);
+# keep the whole directory out of version control.
 *.iml
-.idea/caches/
-.idea/libraries/
-.idea/modules.xml
-.idea/workspace.xml
-.idea/navEditor.xml
-.idea/assetWizardSettings.xml
-.idea/deploymentTargetDropDown.xml
-.idea/deploymentTargetSelector.xml
-.idea/shelf/
+.idea/
 
 # Android Studio captures / profiling
 captures/

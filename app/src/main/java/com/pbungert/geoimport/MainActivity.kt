@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -42,6 +43,7 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Place
@@ -84,6 +86,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
@@ -91,10 +94,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material3.CircularProgressIndicator
+import com.pbungert.geoimport.importer.TrackParser
 import com.pbungert.geoimport.recorder.RecordingState
 import com.pbungert.geoimport.recorder.TrackRecorderService
+import com.pbungert.geoimport.ui.map.DisplayTrack
+import com.pbungert.geoimport.ui.map.FullscreenTrackMapDialog
+import com.pbungert.geoimport.ui.map.TrackMap
 import com.pbungert.geoimport.ui.theme.GeoimportTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.roundToLong
 
 class MainActivity : ComponentActivity() {
@@ -109,7 +120,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class MainTab { Record, Import }
+private enum class MainTab { Record, Import, Map }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -132,7 +143,13 @@ fun ImportScreen(viewModel: ImportViewModel = viewModel()) {
         topBar = {
             TopAppBar(
                 title = {
-                    Text(if (selectedTab == MainTab.Record) "Record GPS track" else "Import photos")
+                    Text(
+                        when (selectedTab) {
+                            MainTab.Record -> "Record GPS track"
+                            MainTab.Import -> "Import photos"
+                            MainTab.Map -> "Recorded tracks"
+                        }
+                    )
                 },
                 actions = { OverflowMenu(onShowLog = { showLog = true }) },
             )
@@ -151,6 +168,12 @@ fun ImportScreen(viewModel: ImportViewModel = viewModel()) {
                     icon = { Icon(Icons.Filled.Download, contentDescription = null) },
                     label = { Text("Import") },
                 )
+                NavigationBarItem(
+                    selected = selectedTab == MainTab.Map,
+                    onClick = { selectedTab = MainTab.Map },
+                    icon = { Icon(Icons.Filled.Map, contentDescription = null) },
+                    label = { Text("Map") },
+                )
             }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -162,6 +185,7 @@ fun ImportScreen(viewModel: ImportViewModel = viewModel()) {
             when (selectedTab) {
                 MainTab.Record -> RecordTab(recording, showMessage, modifier = Modifier.fillMaxSize())
                 MainTab.Import -> ImportTab(viewModel, showMessage, modifier = Modifier.fillMaxSize())
+                MainTab.Map -> MapTab(recording, modifier = Modifier.fillMaxSize())
             }
         }
     }
@@ -300,7 +324,7 @@ private fun RecordTab(
 
     Column(modifier = modifier) {
         Column(
-            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),
+            modifier = Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
@@ -358,6 +382,14 @@ private fun RecordTab(
             }
         }
 
+        LiveTrackMap(
+            recording,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+        )
+
         Button(
             onClick = {
                 if (recording != null) {
@@ -396,6 +428,104 @@ private fun RecordTab(
         }
     }
 }
+
+/**
+ * Map of the recording in progress, re-read from its GPX file as points
+ * arrive. Shows a hint instead of a track while idle or before the first fix.
+ */
+@Composable
+private fun LiveTrackMap(recording: RecordingState?, modifier: Modifier = Modifier) {
+    var track by remember { mutableStateOf<DisplayTrack?>(null) }
+    var fullscreen by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(recording?.fileName, recording?.pointCount) {
+        track = withContext(Dispatchers.IO) {
+            recording?.let { rec ->
+                val file = File(TrackRecorderService.tracksDir(), rec.fileName)
+                try {
+                    file.inputStream().use { TrackParser.parse(it) }
+                        .takeIf { it.isNotEmpty() }
+                        ?.let { DisplayTrack(file.nameWithoutExtension, it) }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        }
+    }
+
+    val tracks = listOfNotNull(track)
+    Box(modifier = modifier.clip(MaterialTheme.shapes.medium)) {
+        TrackMap(tracks, modifier = Modifier.fillMaxSize(), onExpand = { fullscreen = true })
+        if (tracks.isEmpty()) {
+            Surface(
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.align(Alignment.Center),
+            ) {
+                Text(
+                    if (recording == null) "Your track will appear here while recording."
+                    else "Waiting for the first GPS fix…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
+        }
+    }
+    if (fullscreen) {
+        FullscreenTrackMapDialog(tracks) { fullscreen = false }
+    }
+}
+
+// --- Map tab -------------------------------------------------------------
+
+@Composable
+private fun MapTab(recording: RecordingState?, modifier: Modifier = Modifier) {
+    var tracks by remember { mutableStateOf<List<DisplayTrack>?>(null) }
+    var fullscreen by rememberSaveable { mutableStateOf(false) }
+
+    // Reload whenever the active recording grows so the live track stays current.
+    LaunchedEffect(recording?.fileName, recording?.pointCount) {
+        tracks = withContext(Dispatchers.IO) { loadRecordedTracks() }
+    }
+
+    Box(modifier = modifier) {
+        val loaded = tracks
+        when {
+            loaded == null -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            loaded.isEmpty() -> Text(
+                "No recorded tracks yet.\nRecord a GPS track and it will show up here.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.Center).padding(24.dp),
+            )
+            else -> TrackMap(
+                loaded,
+                modifier = Modifier.fillMaxSize(),
+                onExpand = { fullscreen = true },
+            )
+        }
+    }
+    if (fullscreen) {
+        FullscreenTrackMapDialog(tracks.orEmpty()) { fullscreen = false }
+    }
+}
+
+/** Parses all recorded GPX files, newest first, skipping unreadable ones. */
+private fun loadRecordedTracks(): List<DisplayTrack> =
+    TrackRecorderService.tracksDir()
+        .listFiles { file -> file.extension.equals("gpx", ignoreCase = true) }
+        ?.sortedByDescending { it.lastModified() }
+        ?.mapNotNull { file ->
+            try {
+                file.inputStream().use { TrackParser.parse(it) }
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { DisplayTrack(file.nameWithoutExtension, it) }
+            } catch (_: Exception) {
+                null
+            }
+        }
+        .orEmpty()
 
 // --- Import tab ----------------------------------------------------------
 
@@ -444,6 +574,25 @@ private fun ImportTab(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            val trackPoints = viewModel.trackPoints
+            if (viewModel.trackUri != null && !trackPoints.isNullOrEmpty()) {
+                var mapFullscreen by rememberSaveable { mutableStateOf(false) }
+                val displayTracks = listOf(
+                    DisplayTrack(viewModel.trackName ?: "Selected track", trackPoints)
+                )
+                TrackMap(
+                    displayTracks,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(220.dp)
+                        .clip(MaterialTheme.shapes.medium),
+                    onExpand = { mapFullscreen = true },
+                )
+                if (mapFullscreen) {
+                    FullscreenTrackMapDialog(displayTracks) { mapFullscreen = false }
+                }
+            }
 
             AdvancedOptions(
                 open = advancedOpen,

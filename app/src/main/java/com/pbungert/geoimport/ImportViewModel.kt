@@ -17,6 +17,7 @@ import com.pbungert.geoimport.importer.Geotagger
 import com.pbungert.geoimport.importer.PhotoImporter
 import com.pbungert.geoimport.importer.RafGpsWriter
 import com.pbungert.geoimport.importer.TrackParser
+import com.pbungert.geoimport.importer.TrackPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.File
@@ -60,6 +61,10 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     var trackName by mutableStateOf<String?>(null)
         private set
 
+    /** Points of the selected track for the map preview; null while unparsed. */
+    var trackPoints by mutableStateOf<List<TrackPoint>?>(null)
+        private set
+
     var running by mutableStateOf(false)
         private set
     var phase by mutableStateOf<Phase>(Phase.Idle)
@@ -69,11 +74,24 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     fun selectTrack(uri: Uri) {
         trackUri = uri
         trackName = queryDisplayName(uri) ?: uri.lastPathSegment
+        trackPoints = null
+        viewModelScope.launch(Dispatchers.IO) {
+            val points = try {
+                getApplication<Application>().contentResolver
+                    .openInputStream(uri)!!.use { TrackParser.parse(it) }
+            } catch (_: Exception) {
+                emptyList()
+            }
+            launch(Dispatchers.Main.immediate) {
+                if (trackUri == uri) trackPoints = points
+            }
+        }
     }
 
     fun clearTrack() {
         trackUri = null
         trackName = null
+        trackPoints = null
     }
 
     fun startImport() {
