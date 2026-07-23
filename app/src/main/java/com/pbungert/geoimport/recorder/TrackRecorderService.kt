@@ -148,12 +148,20 @@ class TrackRecorderService : Service(), LocationListener {
 
     private fun requestLocationUpdates() {
         if (requestingUpdates) return
+        val manager = getSystemService(LocationManager::class.java)
+        // Fused mixes GPS with wifi- and cell-based positioning, so the track
+        // keeps going indoors where raw GPS drops out. Its coarse cell-only
+        // fixes are thrown away again by the accuracy filter in isUsable().
+        val provider = if (manager.isProviderEnabled(LocationManager.FUSED_PROVIDER)) {
+            LocationManager.FUSED_PROVIDER
+        } else {
+            LocationManager.GPS_PROVIDER
+        }
         val request = LocationRequest.Builder(intervalMillis)
             .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
             .setMinUpdateIntervalMillis(intervalMillis)
             .build()
-        getSystemService(LocationManager::class.java)
-            .requestLocationUpdates(LocationManager.GPS_PROVIDER, request, mainExecutor, this)
+        manager.requestLocationUpdates(provider, request, mainExecutor, this)
         requestingUpdates = true
     }
 
@@ -175,8 +183,23 @@ class TrackRecorderService : Service(), LocationListener {
         wakeLock = null
     }
 
+    /**
+     * Fused fixes range from a few metres (GPS, or wifi in a well-mapped area)
+     * to several kilometres (cell tower only). Only the accurate ones are worth
+     * writing: a cell fix drags the track across town and back for one point.
+     *
+     * Stale fixes are dropped too. Fused likes to answer the first request with
+     * its last known position, and that point's old timestamp would go on to
+     * mis-geotag whichever photo happened to match it.
+     */
+    private fun isUsable(location: Location): Boolean =
+        location.hasAccuracy() &&
+            location.accuracy <= MAX_ACCURACY_METERS &&
+            location.elapsedRealtimeAgeMillis <= maxOf(intervalMillis, MIN_MAX_AGE_MILLIS)
+
     override fun onLocationChanged(location: Location) {
         val w = writer ?: return
+        if (!isUsable(location)) return
         try {
             w.addPoint(location)
         } catch (_: Exception) {
@@ -267,6 +290,15 @@ class TrackRecorderService : Service(), LocationListener {
         const val EXTRA_FILENAME = "filename"
         const val DEFAULT_INTERVAL_MINUTES = 1.0
         const val DEFAULT_INTERVAL_MILLIS = (DEFAULT_INTERVAL_MINUTES * 60_000).toLong()
+
+        /**
+         * Accuracy cut-off for a recorded point. Comfortably above a wifi fix
+         * (~15-40 m) and far below a cell-tower one (500 m and up).
+         */
+        private const val MAX_ACCURACY_METERS = 50f
+
+        /** Age cut-off, when the recording interval is shorter than this. */
+        private const val MIN_MAX_AGE_MILLIS = 60_000L
 
         private const val CHANNEL_ID = "track_recording"
         private const val NOTIFICATION_ID = 42
