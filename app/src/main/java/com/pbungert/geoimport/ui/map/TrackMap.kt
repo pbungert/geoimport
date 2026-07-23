@@ -1,15 +1,26 @@
 package com.pbungert.geoimport.ui.map
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -17,14 +28,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.pbungert.geoimport.importer.TrackPoint
+import kotlinx.coroutines.launch
 import org.maplibre.compose.camera.CameraPosition
 import org.maplibre.compose.camera.rememberCameraState
 import org.maplibre.compose.expressions.dsl.const
@@ -58,6 +72,21 @@ private val TRACK_COLORS = listOf(
     Color(0xFF7B1FA2), Color(0xFF00796B), Color(0xFFC2185B), Color(0xFF5D4037),
 )
 
+/** Blue dot marking the device's own position, the usual map convention. */
+private val MY_LOCATION_COLOR = Color(0xFF1A73E8)
+
+private val LOCATION_PERMISSIONS = arrayOf(
+    Manifest.permission.ACCESS_FINE_LOCATION,
+    Manifest.permission.ACCESS_COARSE_LOCATION,
+)
+
+/** Most accurate first; the first enabled one gets asked for a fix. */
+private val LOCATION_PROVIDERS = listOf(
+    LocationManager.FUSED_PROVIDER,
+    LocationManager.GPS_PROVIDER,
+    LocationManager.NETWORK_PROVIDER,
+)
+
 /**
  * Map showing [tracks] as colored polylines with a dot on each track's latest
  * point. The camera fits all points whenever they change, so a live recording
@@ -71,8 +100,62 @@ fun TrackMap(
 ) {
     val cameraState = rememberCameraState()
     val styleState = rememberStyleState()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var myLocation by remember { mutableStateOf<Position?>(null) }
+    var locating by remember { mutableStateOf(false) }
+    // Once the user has asked to see where they are, stop yanking the camera
+    // back to the track bounds every time a new recorded point arrives.
+    var followingMyLocation by remember { mutableStateOf(false) }
+
+    fun showLocation(location: Location?) {
+        locating = false
+        if (location == null) {
+            Toast.makeText(context, "Current location unavailable", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val position = Position(location.longitude, location.latitude)
+        myLocation = position
+        followingMyLocation = true
+        scope.launch {
+            cameraState.animateTo(
+                CameraPosition(
+                    target = position,
+                    // Keep the user's zoom if they were already looking closely.
+                    zoom = maxOf(cameraState.position.zoom, 15.0),
+                )
+            )
+        }
+    }
+
+    fun locate() {
+        if (locating) return
+        locating = true
+        val manager = context.getSystemService(LocationManager::class.java)
+        val provider = LOCATION_PROVIDERS.firstOrNull {
+            runCatching { manager.isProviderEnabled(it) }.getOrDefault(false)
+        }
+        if (provider == null) {
+            showLocation(null)
+            return
+        }
+        try {
+            manager.getCurrentLocation(provider, null, context.mainExecutor) { showLocation(it) }
+        } catch (_: SecurityException) {
+            showLocation(null)
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        if (grants.values.any { it }) locate()
+        else Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
+    }
+
     val pointCount = tracks.sumOf { it.points.size }
     LaunchedEffect(pointCount) {
+        if (followingMyLocation) return@LaunchedEffect
         val points = tracks.flatMap { it.points }
         if (points.isEmpty()) return@LaunchedEffect
         val south = points.minOf { it.lat }
@@ -145,6 +228,17 @@ fun TrackMap(
                     )
                 }
             }
+            myLocation?.let { position ->
+                val here = rememberGeoJsonSource(GeoJsonData.Features(Point(position)))
+                CircleLayer(
+                    id = "my-location",
+                    source = here,
+                    color = const(MY_LOCATION_COLOR),
+                    radius = const(6.dp),
+                    strokeColor = const(Color.White),
+                    strokeWidth = const(2.5.dp),
+                )
+            }
         }
         ScaleBar(
             metersPerDp = cameraState.metersPerDpAtTarget,
@@ -163,6 +257,30 @@ fun TrackMap(
             styleState = styleState,
             modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
         )
+        FilledTonalIconButton(
+            onClick = {
+                if (LOCATION_PERMISSIONS.any {
+                        context.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED
+                    }
+                ) {
+                    locate()
+                } else {
+                    permissionLauncher.launch(LOCATION_PERMISSIONS)
+                }
+            },
+            // Sits one row above the attribution button in the same corner.
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = 48.dp),
+        ) {
+            if (locating) {
+                CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    color = LocalContentColor.current,
+                    modifier = Modifier.size(18.dp),
+                )
+            } else {
+                Icon(Icons.Filled.MyLocation, contentDescription = "Show my location")
+            }
+        }
         if (onExpand != null) {
             FilledTonalIconButton(
                 onClick = onExpand,
