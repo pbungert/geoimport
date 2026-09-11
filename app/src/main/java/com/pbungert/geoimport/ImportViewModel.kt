@@ -13,11 +13,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.pbungert.geoimport.importer.Geotagger
-import com.pbungert.geoimport.importer.PhotoImporter
-import com.pbungert.geoimport.importer.RafGpsWriter
-import com.pbungert.geoimport.importer.TrackParser
-import com.pbungert.geoimport.importer.TrackPoint
+import com.pbungert.geoimport.core.geotag.Geotagger
+import com.pbungert.geoimport.core.geotag.RafGpsWriter
+import com.pbungert.geoimport.core.imports.PhotoImporter
+import com.pbungert.geoimport.core.model.TrackPoint
+import com.pbungert.geoimport.core.track.TrackParser
+import com.pbungert.geoimport.platform.AndroidExifDateReader
+import com.pbungert.geoimport.platform.AndroidJpegGpsWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.File
@@ -50,6 +52,8 @@ data class ImportSummary(
 )
 
 class ImportViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val rafGpsWriter = RafGpsWriter(AndroidJpegGpsWriter)
 
     // Options mirroring the script's arguments
     var startFilename by mutableStateOf("")
@@ -164,7 +168,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val source = File(volumeDir, "DCIM")
         val destBase = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
 
-        val importer = PhotoImporter(source, destBase, ::log)
+        val importer = PhotoImporter(source, destBase, AndroidExifDateReader, ::log)
         postPhase(Phase.Busy("Importing photos", 0, 0))
         val result = importer.run(startFn, startTs) { done, total ->
             postPhase(Phase.Busy("Importing photos", done, total))
@@ -194,7 +198,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                     // Lightroom for Android ignores XMP sidecars, so the GPS
                     // position has to live in the RAF's EXIF block itself.
                     try {
-                        RafGpsWriter.writeGps(file, point)
+                        rafGpsWriter.writeGps(file, point)
                         exifTagged++
                     } catch (e: Exception) {
                         log(

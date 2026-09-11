@@ -1,5 +1,6 @@
-package com.pbungert.geoimport.importer
+package com.pbungert.geoimport.core.geotag
 
+import com.pbungert.geoimport.core.model.TrackPoint
 import java.io.File
 import java.time.Duration
 import java.time.Instant
@@ -8,12 +9,13 @@ import kotlin.math.abs
 import kotlin.math.roundToLong
 
 /**
- * Matches photo capture times against a track. RAF files get the position
- * written into their EXIF block via [RafGpsWriter] (Lightroom for Android
- * ignores XMP sidecars); [writeSidecar] remains for videos and as a fallback
- * when the EXIF write fails. Positions between two track points are linearly
- * interpolated; outside the track's time range the nearest endpoint is used
- * if it is within [tolerance].
+ * Matches photo capture times against a track. Positions between two track
+ * points are linearly interpolated; outside the track's time range the nearest
+ * endpoint is used if it is within [tolerance].
+ *
+ * Note that [tolerance] only clamps extrapolation past the ends of the track.
+ * Inside the range a photo is always interpolated between its bracketing
+ * points, however far apart in time those are.
  */
 class Geotagger(track: List<TrackPoint>, private val tolerance: Duration) {
 

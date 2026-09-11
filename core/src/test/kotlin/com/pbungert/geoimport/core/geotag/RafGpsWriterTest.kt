@@ -1,6 +1,6 @@
-package com.pbungert.geoimport
+package com.pbungert.geoimport.core.geotag
 
-import com.pbungert.geoimport.importer.RafGpsWriter
+
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows

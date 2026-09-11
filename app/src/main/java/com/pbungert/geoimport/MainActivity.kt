@@ -95,7 +95,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.material3.CircularProgressIndicator
-import com.pbungert.geoimport.importer.TrackParser
+import com.pbungert.geoimport.core.track.TrackParser
 import com.pbungert.geoimport.recorder.RecordingState
 import com.pbungert.geoimport.recorder.TrackRecorderService
 import com.pbungert.geoimport.ui.map.DisplayTrack

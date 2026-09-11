@@ -23,5 +23,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "geoimport"
+include(":core")
 include(":app")
  

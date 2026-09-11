@@ -18,8 +18,11 @@ import android.os.Environment
 import android.os.IBinder
 import android.os.PowerManager
 import com.pbungert.geoimport.MainActivity
+import com.pbungert.geoimport.core.model.TrackPoint
+import com.pbungert.geoimport.core.track.GpxWriter
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
+import java.time.Instant
 import java.time.LocalDate
 import java.util.Locale
 
@@ -201,7 +204,7 @@ class TrackRecorderService : Service(), LocationListener {
         val w = writer ?: return
         if (!isUsable(location)) return
         try {
-            w.addPoint(location)
+            w.addPoint(location.toTrackPoint())
         } catch (_: Exception) {
             return
         }
@@ -325,3 +328,15 @@ class TrackRecorderService : Service(), LocationListener {
         }
     }
 }
+
+/**
+ * Android fix to the portable track model. Altitude is the raw WGS-84
+ * ellipsoidal height; accuracy, speed and bearing are used for filtering only
+ * and are deliberately not persisted.
+ */
+private fun Location.toTrackPoint() = TrackPoint(
+    time = Instant.ofEpochMilli(time),
+    lat = latitude,
+    lon = longitude,
+    ele = if (hasAltitude()) altitude else null,
+)

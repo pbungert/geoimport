@@ -1,14 +1,12 @@
-package com.pbungert.geoimport.importer
+package com.pbungert.geoimport.core.imports
 
-import androidx.exifinterface.media.ExifInterface
+import com.pbungert.geoimport.core.spi.ExifDateReader
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.BasicFileAttributes
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
 import kotlin.math.min
 import kotlin.math.pow
 
@@ -21,6 +19,7 @@ import kotlin.math.pow
 class PhotoImporter(
     private val sourcePath: File,
     private val destBasePath: File,
+    private val exifDateReader: ExifDateReader,
     private val log: (String) -> Unit,
 ) {
     data class ImportResult(val copied: List<File>, val destFolder: File?)
@@ -137,36 +136,6 @@ class PhotoImporter(
         return result
     }
 
-    /**
-     * Sorts by the trailing number in the filename, then rotates so the
-     * sequence starts after the largest gap — this keeps chronological order
-     * when the camera's file counter has wrapped around.
-     */
-    private fun sortByFilenameChronological(files: List<File>): List<File> {
-        val parsed = files
-            .mapNotNull { f -> parseFilenameSequence(f.name)?.let { f to it } }
-            .sortedBy { it.second.value }
-
-        if (parsed.size < 2) return parsed.map { it.first }
-
-        val modulus = 10.0.pow(parsed.maxOf { it.second.width }).toInt()
-
-        var bestGap = -1
-        var bestIndex = 0
-        for (i in 0 until parsed.size - 1) {
-            val gap = parsed[i + 1].second.value - parsed[i].second.value
-            if (gap > bestGap) {
-                bestGap = gap
-                bestIndex = i + 1
-            }
-        }
-
-        val wrapGap = parsed[0].second.value + modulus - parsed.last().second.value
-        val startIndex = if (wrapGap > bestGap) 0 else bestIndex
-
-        return (parsed.drop(startIndex) + parsed.take(startIndex)).map { it.first }
-    }
-
     private fun createNextImportFolder(): File {
         destBasePath.mkdirs()
         val folder = File(destBasePath, importFolderName(findHighestImportNumber() + 1))
@@ -197,25 +166,12 @@ class PhotoImporter(
         return fileFallbackTime(file)
     }
 
-    private fun readExifDateTaken(file: File): Pair<LocalDateTime, ZoneOffset?>? {
+    private fun readExifDateTaken(file: File) =
         try {
-            val exif = ExifInterface(file)
-            val dateStr = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
-            if (!dateStr.isNullOrEmpty()) {
-                val local = LocalDateTime.parse(dateStr, EXIF_DATE_FORMAT)
-                val offset = exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL)?.let {
-                    try {
-                        ZoneOffset.of(it)
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
-                return local to offset
-            }
+            exifDateReader.readDateTaken(file)
         } catch (_: Exception) {
+            null
         }
-        return null
-    }
 
     private fun fileFallbackTime(file: File): Instant {
         val attrs = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
@@ -224,22 +180,51 @@ class PhotoImporter(
         )
     }
 
-    private data class FilenameSequence(val value: Int, val width: Int)
-
-    private fun parseFilenameSequence(filename: String): FilenameSequence? {
-        val match = FILENAME_SEQUENCE_PATTERN.find(filename.substringBeforeLast('.')) ?: return null
-        val value = match.value.toIntOrNull() ?: return null
-        return FilenameSequence(value, match.value.length)
-    }
-
     private fun importFolderName(number: Int) = "Import %02d".format(number)
 
-    private companion object {
+    companion object {
         val FUJI_FOLDER_PATTERN = Regex("""^\d{3}_FUJI$""")
 
         /** The last run of digits in the filename. */
         val FILENAME_SEQUENCE_PATTERN = Regex("""(\d+)(?!.*\d)""")
 
-        val EXIF_DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss")
+        private data class FilenameSequence(val value: Int, val width: Int)
+
+        private fun parseFilenameSequence(filename: String): FilenameSequence? {
+            val match = FILENAME_SEQUENCE_PATTERN.find(filename.substringBeforeLast('.'))
+                ?: return null
+            val value = match.value.toIntOrNull() ?: return null
+            return FilenameSequence(value, match.value.length)
+        }
+
+        /**
+         * Sorts by the trailing number in the filename, then rotates so the
+         * sequence starts after the largest gap — this keeps chronological order
+         * when the camera's file counter has wrapped around.
+         */
+        fun sortByFilenameChronological(files: List<File>): List<File> {
+            val parsed = files
+                .mapNotNull { f -> parseFilenameSequence(f.name)?.let { f to it } }
+                .sortedBy { it.second.value }
+
+            if (parsed.size < 2) return parsed.map { it.first }
+
+            val modulus = 10.0.pow(parsed.maxOf { it.second.width }).toInt()
+
+            var bestGap = -1
+            var bestIndex = 0
+            for (i in 0 until parsed.size - 1) {
+                val gap = parsed[i + 1].second.value - parsed[i].second.value
+                if (gap > bestGap) {
+                    bestGap = gap
+                    bestIndex = i + 1
+                }
+            }
+
+            val wrapGap = parsed[0].second.value + modulus - parsed.last().second.value
+            val startIndex = if (wrapGap > bestGap) 0 else bestIndex
+
+            return (parsed.drop(startIndex) + parsed.take(startIndex)).map { it.first }
+        }
     }
 }

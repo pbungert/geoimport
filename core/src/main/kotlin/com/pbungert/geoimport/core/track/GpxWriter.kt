@@ -1,10 +1,9 @@
-package com.pbungert.geoimport.recorder
+package com.pbungert.geoimport.core.track
 
-import android.location.Location
+import com.pbungert.geoimport.core.model.TrackPoint
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.charset.StandardCharsets
-import java.time.Instant
 import java.util.Locale
 
 /**
@@ -31,18 +30,16 @@ class GpxWriter(val file: File, trackName: String) {
         }
     }
 
-    fun addPoint(location: Location) {
+    fun addPoint(point: TrackPoint) {
         val sb = StringBuilder()
         sb.append(
             String.format(
                 Locale.US, "   <trkpt lat=\"%.7f\" lon=\"%.7f\">\n",
-                location.latitude, location.longitude,
+                point.lat, point.lon,
             )
         )
-        if (location.hasAltitude()) {
-            sb.append(String.format(Locale.US, "    <ele>%.1f</ele>\n", location.altitude))
-        }
-        sb.append("    <time>").append(Instant.ofEpochMilli(location.time)).append("</time>\n")
+        point.ele?.let { sb.append(String.format(Locale.US, "    <ele>%.1f</ele>\n", it)) }
+        sb.append("    <time>").append(point.time).append("</time>\n")
         sb.append("   </trkpt>\n")
         val bytes = sb.toString().toByteArray(StandardCharsets.UTF_8)
         raf.seek(footerOffset)
