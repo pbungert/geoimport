@@ -1,6 +1,8 @@
 package com.pbungert.geoimport
 
 import android.app.Application
+import android.content.Context
+import android.content.Intent
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Environment
@@ -19,6 +21,8 @@ import com.pbungert.geoimport.core.geotag.Geotagger
 import com.pbungert.geoimport.core.geotag.GpsWriteResult
 import com.pbungert.geoimport.core.geotag.XmpSidecarWriter
 import com.pbungert.geoimport.core.imports.CaptureTimeResolver
+import com.pbungert.geoimport.core.imports.ImportPlan
+import com.pbungert.geoimport.core.imports.PlannedFile
 import com.pbungert.geoimport.core.imports.PhotoImporter
 import com.pbungert.geoimport.core.model.TrackPoint
 import com.pbungert.geoimport.core.track.TrackParser
@@ -33,11 +37,15 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import kotlin.reflect.KProperty
 import kotlin.math.roundToLong
 
 /** Coarse UI state driving the progress bar / summary, separate from the debug log. */
 sealed interface Phase {
     data object Idle : Phase
+
+    /** Preview: what the import would do, awaiting confirmation. */
+    data class Planned(val plan: ImportPlan) : Phase
 
     /** [total] == 0 means the work is indeterminate (no count yet). */
     data class Busy(val label: String, val current: Int, val total: Int) : Phase
@@ -48,8 +56,8 @@ sealed interface Phase {
 data class ImportSummary(
     val destFolder: String?,
     val copied: Int,
-    val rafCount: Int,
-    val movCount: Int,
+    /** Counts per extension, e.g. "12 RAF, 3 MOV" - no format is hardcoded. */
+    val breakdown: String,
     /** Whether a track was supplied and geotagging was attempted. */
     val geotagAttempted: Boolean,
     val exifTagged: Int,
@@ -67,23 +75,45 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         },
     )
 
-    // Options mirroring the script's arguments
+    /**
+     * Settings that should survive a restart. Before this the importer
+     * remembered nothing at all between launches - every option reset to its
+     * default, which would make a camera clock offset worse than useless.
+     * Import history itself still lives in the Import NN folders on disk.
+     */
+    private val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    private inner class Saved(private val key: String, private val default: String) {
+        private val state = mutableStateOf(prefs.getString(key, default) ?: default)
+        operator fun getValue(thisRef: Any?, property: KProperty<*>) = state.value
+        operator fun setValue(thisRef: Any?, property: KProperty<*>, value: String) {
+            state.value = value
+            prefs.edit().putString(key, value).apply()
+        }
+    }
+
+    // Per-run, deliberately not persisted: a stale resume point is dangerous.
     var startFilename by mutableStateOf("")
     var startTimestamp by mutableStateOf("")
-    var toleranceMinutes by mutableStateOf("30")
+
+    var toleranceMinutes by Saved(KEY_TOLERANCE, "30")
 
     /**
      * Zone the camera's clock was set to, used only when it recorded no
      * OffsetTimeOriginal. Blank means this device's zone - right when you
      * shoot and import in the same place, wrong for a trip imported at home.
      */
-    var photoTimeZone by mutableStateOf("")
+    var photoTimeZone by Saved(KEY_PHOTO_ZONE, "")
 
     /**
      * Camera clock error in minutes, added to every capture time. Negative if
      * the camera runs fast. Blank means no correction.
      */
-    var clockOffsetMinutes by mutableStateOf("")
+    var clockOffsetMinutes by Saved(KEY_CLOCK_OFFSET, "")
+
+    /** False only when text has been typed and it is not a known zone id. */
+    val photoTimeZoneIsValid: Boolean
+        get() = photoTimeZone.trim().let { it.isEmpty() || runCatching { ZoneId.of(it) }.isSuccess }
 
     private val assumedZone: ZoneId
         get() = photoTimeZone.trim().takeIf { it.isNotEmpty() }
@@ -110,7 +140,33 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         private set
     val logLines = mutableStateListOf<String>()
 
+    init {
+        // The track picker used to have to be driven again on every launch;
+        // a persisted URI permission makes the last choice stick.
+        prefs.getString(KEY_TRACK_URI, null)
+            ?.let { runCatching { Uri.parse(it) }.getOrNull() }
+            ?.let { restoreTrack(it) }
+    }
+
     fun selectTrack(uri: Uri) {
+        runCatching {
+            getApplication<Application>().contentResolver
+                .takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        prefs.edit().putString(KEY_TRACK_URI, uri.toString()).apply()
+        loadTrack(uri)
+    }
+
+    /**
+     * Re-reads a track whose permission was granted in an earlier session.
+     * The grant can be gone (revoked, or the file deleted), so a failure here
+     * just clears the selection rather than surfacing an error.
+     */
+    private fun restoreTrack(uri: Uri) {
+        loadTrack(uri, onFailure = { clearTrack() })
+    }
+
+    private fun loadTrack(uri: Uri, onFailure: (() -> Unit)? = null) {
         trackUri = uri
         trackName = queryDisplayName(uri) ?: uri.lastPathSegment
         trackPoints = null
@@ -122,7 +178,8 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                 emptyList()
             }
             launch(Dispatchers.Main.immediate) {
-                if (trackUri == uri) trackPoints = points
+                if (trackUri != uri) return@launch
+                if (points.isEmpty() && onFailure != null) onFailure() else trackPoints = points
             }
         }
     }
@@ -131,8 +188,14 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         trackUri = null
         trackName = null
         trackPoints = null
+        prefs.edit().remove(KEY_TRACK_URI).apply()
     }
 
+    /**
+     * Builds the preview. Nothing is written until [confirmImport]; the plan
+     * it produces is the same object execution consumes, so the list on
+     * screen cannot disagree with what happens.
+     */
     fun startImport() {
         if (running) return
         running = true
@@ -140,7 +203,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         postPhase(Phase.Busy("Preparing…", 0, 0))
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                runImport()
+                preparePlan()
             } catch (e: Exception) {
                 fail("Import failed: ${e.message ?: e}")
             } finally {
@@ -149,7 +212,42 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun runImport() {
+    fun confirmImport() {
+        val planned = phase as? Phase.Planned ?: return
+        if (running) return
+        running = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                executePlan(planned.plan)
+            } catch (e: Exception) {
+                fail("Import failed: ${e.message ?: e}")
+            } finally {
+                running = false
+            }
+        }
+    }
+
+    fun cancelPlan() {
+        if (running) return
+        postPhase(Phase.Idle)
+    }
+
+    /** Includes or excludes one file before the import is confirmed. */
+    fun setSelected(source: File, selected: Boolean) {
+        val planned = phase as? Phase.Planned ?: return
+        val plan = planned.plan
+        postPhase(
+            Phase.Planned(
+                plan.copy(
+                    entries = plan.entries.map {
+                        if (it.source == source) it.copy(selected = selected) else it
+                    }
+                )
+            )
+        )
+    }
+
+    private fun preparePlan() {
         val app = getApplication<Application>()
         log("Starting Photo Importer...")
 
@@ -204,35 +302,64 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val destBase = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
 
         val captureTime = CaptureTimeResolver(AndroidExifDateReader, assumedZone, cameraClockOffset)
+        val geotagger = track?.let { Geotagger(it, tolerance) }
         val importer = PhotoImporter(source, destBase, captureTime, ::log)
-        postPhase(Phase.Busy("Importing photos", 0, 0))
-        val result = importer.run(startFn, startTs) { done, total ->
-            postPhase(Phase.Busy("Importing photos", done, total))
-        }
-        if (result.copied.isEmpty()) {
+        val plan = importer.plan(startFn, startTs, geotagger, gpsWriter)
+
+        if (plan.isEmpty) {
             log("Nothing to import.")
-            postPhase(Phase.Done(ImportSummary(null, 0, 0, 0, track != null, 0, 0, 0)))
+            postPhase(
+                Phase.Done(
+                    ImportSummary(
+                        null, 0, PhotoImporter.describe(emptyList()), track != null, 0, 0, 0
+                    )
+                )
+            )
             return
+        }
+        pendingContext = PendingImport(importer, geotagger, captureTime, track != null)
+        postPhase(Phase.Planned(plan))
+    }
+
+    /** Everything [executePlan] needs that the plan itself does not carry. */
+    private class PendingImport(
+        val importer: PhotoImporter,
+        val geotagger: Geotagger?,
+        val captureTime: CaptureTimeResolver,
+        val hasTrack: Boolean,
+    )
+
+    private var pendingContext: PendingImport? = null
+
+    private fun executePlan(plan: ImportPlan) {
+        val app = getApplication<Application>()
+        val context = pendingContext ?: run {
+            fail("The preview expired. Run the import again.")
+            return
+        }
+
+        postPhase(Phase.Busy("Importing photos", 0, plan.selected.size))
+        val result = context.importer.execute(plan) { done, total ->
+            postPhase(Phase.Busy("Importing photos", done, total))
         }
 
         var exifTagged = 0
         var sidecarTagged = 0
         var notTagged = 0
-        if (track != null) {
-            val geotagger = Geotagger(track, tolerance)
+        if (context.geotagger != null) {
             val total = result.copied.size
             postPhase(Phase.Busy("Geotagging", 0, total))
             for ((index, file) in result.copied.withIndex()) {
-                val point = geotagger.locate(captureTime.instantOf(file))
+                val point = context.geotagger.locate(context.captureTime.instantOf(file))
                 if (point == null) {
-                    log("No track point within tolerance for ${file.name} — not geotagged.")
+                    log("No track point within tolerance for ${file.name} - not geotagged.")
                     notTagged++
                     postPhase(Phase.Busy("Geotagging", index + 1, total))
                     continue
                 }
-                // The chain embeds where it can — Lightroom for Android ignores
+                // The chain embeds where it can - Lightroom for Android ignores
                 // XMP sidecars, so a RAF position has to live in its EXIF block
-                // — and falls back to a sidecar for anything else. A file that
+                // - and falls back to a sidecar for anything else. A file that
                 // fails outright is reported and the run continues.
                 try {
                     when (gpsWriter.write(file, point)) {
@@ -255,20 +382,185 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             app, result.copied.map { it.path }.toTypedArray(), null, null
         )
         log("Import complete! ${result.copied.size} files in '${result.destFolder?.name}'.")
+        pendingContext = null
         postPhase(
             Phase.Done(
                 ImportSummary(
                     destFolder = result.destFolder?.name,
                     copied = result.copied.size,
-                    rafCount = result.copied.count { it.extension.equals("raf", ignoreCase = true) },
-                    movCount = result.copied.count { it.extension.equals("mov", ignoreCase = true) },
-                    geotagAttempted = track != null,
+                    breakdown = PhotoImporter.describe(result.copied),
+                    geotagAttempted = context.hasTrack,
                     exifTagged = exifTagged,
                     sidecarTagged = sidecarTagged,
                     notTagged = notTagged,
                 )
             )
         )
+    }
+
+    // --- Tagging photos already imported --------------------------------
+
+    /** Independent of [phase] so a preview on one tab survives the other. */
+    var tagPhase by mutableStateOf<Phase>(Phase.Idle)
+        private set
+
+    var tagFolder by mutableStateOf<File?>(null)
+
+    /**
+     * The Import NN folders on this device. Tagging targets these rather than
+     * an arbitrary tree: it is where imports land, it needs no SAF picker, and
+     * it keeps everything on java.io.File like the rest of the app.
+     */
+    fun importFolders(): List<File> {
+        val base = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+        return base.listFiles { f -> f.isDirectory && f.name.startsWith("Import ") }
+            ?.sortedByDescending { it.name }
+            .orEmpty()
+    }
+
+    fun startTagging() {
+        val folder = tagFolder ?: return
+        if (running) return
+        running = true
+        logLines.clear()
+        tagPhase = Phase.Busy("Preparing…", 0, 0)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                prepareTagPlan(folder)
+            } catch (e: Exception) {
+                postTagPhase(Phase.Failed("Tagging failed: ${e.message ?: e}"))
+            } finally {
+                running = false
+            }
+        }
+    }
+
+    private fun prepareTagPlan(folder: File) {
+        val app = getApplication<Application>()
+        val uri = trackUri ?: run {
+            postTagPhase(Phase.Failed("Select a GPS track first."))
+            return
+        }
+        val track = try {
+            app.contentResolver.openInputStream(uri)!!.use { TrackParser.parse(it) }
+        } catch (e: Exception) {
+            postTagPhase(Phase.Failed("Failed to read track file: ${e.message ?: e}"))
+            return
+        }
+        if (track.isEmpty()) {
+            postTagPhase(Phase.Failed("Track file contains no timestamped points."))
+            return
+        }
+
+        val tolerance = Duration.ofMinutes(toleranceMinutes.trim().toLongOrNull() ?: 30L)
+        val geotagger = Geotagger(track, tolerance)
+        val captureTime = CaptureTimeResolver(AndroidExifDateReader, assumedZone, cameraClockOffset)
+
+        val files = folder.listFiles { f ->
+            f.isFile && f.extension.lowercase() in PhotoImporter.DEFAULT_EXTENSIONS
+        }?.sortedBy { it.name }.orEmpty()
+
+        if (files.isEmpty()) {
+            postTagPhase(Phase.Failed("No taggable files in ${folder.name}."))
+            return
+        }
+
+        // Tagging happens in place, so source and destination are the same file.
+        val entries = files.map { file ->
+            val time = captureTime.instantOf(file)
+            val fix = geotagger.locate(time)
+            PlannedFile(
+                source = file,
+                destination = file,
+                captureTime = time,
+                fix = fix,
+                writer = if (fix == null) null else gpsWriter.effectiveWriterFor(file)?.name,
+            )
+        }
+        postTagPhase(Phase.Planned(ImportPlan(folder, folder, null, entries)))
+    }
+
+    fun confirmTagging() {
+        val planned = tagPhase as? Phase.Planned ?: return
+        if (running) return
+        running = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                executeTagPlan(planned.plan)
+            } catch (e: Exception) {
+                postTagPhase(Phase.Failed("Tagging failed: ${e.message ?: e}"))
+            } finally {
+                running = false
+            }
+        }
+    }
+
+    fun cancelTagging() {
+        if (!running) postTagPhase(Phase.Idle)
+    }
+
+    fun setTagSelected(source: File, selected: Boolean) {
+        val planned = tagPhase as? Phase.Planned ?: return
+        val plan = planned.plan
+        postTagPhase(
+            Phase.Planned(
+                plan.copy(
+                    entries = plan.entries.map {
+                        if (it.source == source) it.copy(selected = selected) else it
+                    }
+                )
+            )
+        )
+    }
+
+    private fun executeTagPlan(plan: ImportPlan) {
+        val app = getApplication<Application>()
+        val targets = plan.selected
+        var exifTagged = 0
+        var sidecarTagged = 0
+        var notTagged = 0
+
+        postTagPhase(Phase.Busy("Geotagging", 0, targets.size))
+        for ((index, entry) in targets.withIndex()) {
+            val fix = entry.fix
+            if (fix == null) {
+                log("No track point within tolerance for ${entry.source.name} - not geotagged.")
+                notTagged++
+            } else {
+                try {
+                    when (gpsWriter.write(entry.source, fix)) {
+                        is GpsWriteResult.Embedded -> exifTagged++
+                        is GpsWriteResult.Sidecar -> sidecarTagged++
+                    }
+                } catch (e: Exception) {
+                    log("Could not geotag ${entry.source.name}: ${e.message ?: e}")
+                    notTagged++
+                }
+            }
+            postTagPhase(Phase.Busy("Geotagging", index + 1, targets.size))
+        }
+
+        MediaScannerConnection.scanFile(
+            app, targets.map { it.source.path }.toTypedArray(), null, null
+        )
+        log("Tagged ${exifTagged + sidecarTagged} of ${targets.size} files.")
+        postTagPhase(
+            Phase.Done(
+                ImportSummary(
+                    destFolder = plan.destFolder.name,
+                    copied = targets.size,
+                    breakdown = PhotoImporter.describe(targets.map { it.source }),
+                    geotagAttempted = true,
+                    exifTagged = exifTagged,
+                    sidecarTagged = sidecarTagged,
+                    notTagged = notTagged,
+                )
+            )
+        )
+    }
+
+    private fun postTagPhase(next: Phase) {
+        viewModelScope.launch(Dispatchers.Main.immediate) { tagPhase = next }
     }
 
     /**
@@ -326,6 +618,12 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             }
 
     private companion object {
+        const val PREFS = "importer"
+        const val KEY_TOLERANCE = "tolerance"
+        const val KEY_PHOTO_ZONE = "photoZone"
+        const val KEY_CLOCK_OFFSET = "clockOffset"
+        const val KEY_TRACK_URI = "trackUri"
+
         val TIMESTAMP_PATTERNS = listOf(
             "yyyy-MM-dd HH:mm:ss",
             "yyyy-MM-dd HH:mm",

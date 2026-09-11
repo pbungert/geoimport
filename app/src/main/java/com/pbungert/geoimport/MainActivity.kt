@@ -16,6 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.EditLocationAlt
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -53,6 +55,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -65,6 +68,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -105,7 +109,10 @@ import com.pbungert.geoimport.ui.theme.GeoimportTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.pbungert.geoimport.core.imports.ImportPlan
 import java.io.File
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlin.math.roundToLong
 
 class MainActivity : ComponentActivity() {
@@ -120,7 +127,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class MainTab { Record, Import, Map }
+private enum class MainTab { Record, Import, Tag, Map }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -147,6 +154,7 @@ fun ImportScreen(viewModel: ImportViewModel = viewModel()) {
                         when (selectedTab) {
                             MainTab.Record -> "Record GPS track"
                             MainTab.Import -> "Import photos"
+                            MainTab.Tag -> "Geotag imported photos"
                             MainTab.Map -> "Recorded tracks"
                         }
                     )
@@ -169,6 +177,12 @@ fun ImportScreen(viewModel: ImportViewModel = viewModel()) {
                     label = { Text("Import") },
                 )
                 NavigationBarItem(
+                    selected = selectedTab == MainTab.Tag,
+                    onClick = { selectedTab = MainTab.Tag },
+                    icon = { Icon(Icons.Filled.EditLocationAlt, contentDescription = null) },
+                    label = { Text("Tag") },
+                )
+                NavigationBarItem(
                     selected = selectedTab == MainTab.Map,
                     onClick = { selectedTab = MainTab.Map },
                     icon = { Icon(Icons.Filled.Map, contentDescription = null) },
@@ -185,6 +199,7 @@ fun ImportScreen(viewModel: ImportViewModel = viewModel()) {
             when (selectedTab) {
                 MainTab.Record -> RecordTab(recording, showMessage, modifier = Modifier.fillMaxSize())
                 MainTab.Import -> ImportTab(viewModel, showMessage, modifier = Modifier.fillMaxSize())
+                MainTab.Tag -> TagTab(viewModel, modifier = Modifier.fillMaxSize())
                 MainTab.Map -> MapTab(recording, modifier = Modifier.fillMaxSize())
             }
         }
@@ -608,6 +623,10 @@ private fun ImportTab(
             )
 
             when (val phase = viewModel.phase) {
+                is Phase.Planned -> PlanPreview(
+                    plan = phase.plan,
+                    onToggle = { source, selected -> viewModel.setSelected(source, selected) },
+                )
                 is Phase.Busy -> ProgressSection(phase)
                 is Phase.Done -> SummaryCard(phase.summary)
                 is Phase.Failed -> FailureCard(phase.message)
@@ -615,26 +634,206 @@ private fun ImportTab(
             }
         }
 
-        Button(
-            onClick = {
-                if (!Environment.isExternalStorageManager()) {
-                    showMessage("Grant \"All files access\", then tap Import again.")
-                    context.startActivity(
-                        Intent(
-                            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                            Uri.fromParts("package", context.packageName, null),
+        val planned = viewModel.phase as? Phase.Planned
+        if (planned == null) {
+            Button(
+                onClick = {
+                    if (!Environment.isExternalStorageManager()) {
+                        showMessage("Grant \"All files access\", then tap Import again.")
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                Uri.fromParts("package", context.packageName, null),
+                            )
                         )
-                    )
-                } else {
-                    viewModel.startImport()
+                    } else {
+                        viewModel.startImport()
+                    }
+                },
+                enabled = !viewModel.running,
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+            ) {
+                Icon(Icons.Filled.SdCard, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(if (viewModel.running) "Preparing…" else "Import from SD card")
+            }
+        } else {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+            ) {
+                OutlinedButton(
+                    onClick = { viewModel.cancelPlan() },
+                    enabled = !viewModel.running,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Cancel")
                 }
-            },
-            enabled = !viewModel.running,
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                Button(
+                    onClick = { viewModel.confirmImport() },
+                    enabled = !viewModel.running && planned.plan.selected.isNotEmpty(),
+                    modifier = Modifier.weight(2f),
+                ) {
+                    Icon(Icons.Filled.SdCard, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Import ${planned.plan.selected.size} files")
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The preview: one row per file with the position it would be tagged with and
+ * the writer that would handle it. Renders the same ImportPlan the import
+ * consumes, so what is listed is exactly what happens.
+ */
+@Composable
+private fun PlanPreview(
+    plan: ImportPlan,
+    onToggle: (File, Boolean) -> Unit,
+) {
+    val zone = remember { ZoneId.systemDefault() }
+    val timeFormat = remember { DateTimeFormatter.ofPattern("HH:mm:ss") }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(vertical = 8.dp)) {
+            Text(
+                "Into \"${plan.destFolder.name}\"",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            Text(
+                "${plan.willGeotag} of ${plan.selected.size} would be geotagged",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            Spacer(Modifier.height(8.dp))
+
+            for (entry in plan.entries) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onToggle(entry.source, !entry.selected) }
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                ) {
+                    Checkbox(
+                        checked = entry.selected,
+                        onCheckedChange = { onToggle(entry.source, it) },
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(entry.source.name, style = MaterialTheme.typography.bodyMedium)
+                        val taken = entry.captureTime.atZone(zone).format(timeFormat)
+                        val where = entry.fix?.let {
+                            "%.5f, %.5f".format(it.lat, it.lon) +
+                                (entry.writer?.let { w -> "  [$w]" } ?: "")
+                        } ?: "no track point within tolerance"
+                        Text(
+                            "$taken  $where",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (entry.fix == null) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Geotags photos that are already in an Import NN folder - for when a track
+ * was recorded but not selected at import time, or the camera clock was off.
+ */
+@Composable
+private fun TagTab(viewModel: ImportViewModel, modifier: Modifier = Modifier) {
+    val folders = remember(viewModel.tagPhase) { viewModel.importFolders() }
+
+    Column(modifier = modifier) {
+        Column(
+            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(Icons.Filled.SdCard, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(if (viewModel.running) "Importing…" else "Import from SD card")
+            Text(
+                "Writes positions into photos already on this device. " +
+                    "Uses the track, tolerance and clock offset from the Import tab.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Text(
+                viewModel.trackName?.let { "Track: $it" } ?: "No track selected - pick one on the Import tab.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+
+            if (folders.isEmpty()) {
+                Text("No \"Import NN\" folders found.", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                Text("Folder", style = MaterialTheme.typography.labelMedium)
+                for (folder in folders) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.tagFolder = folder },
+                    ) {
+                        RadioButton(
+                            selected = viewModel.tagFolder == folder,
+                            onClick = { viewModel.tagFolder = folder },
+                        )
+                        Text(folder.name, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+
+            when (val phase = viewModel.tagPhase) {
+                is Phase.Planned -> PlanPreview(
+                    plan = phase.plan,
+                    onToggle = { source, selected -> viewModel.setTagSelected(source, selected) },
+                )
+                is Phase.Busy -> ProgressSection(phase)
+                is Phase.Done -> SummaryCard(phase.summary)
+                is Phase.Failed -> FailureCard(phase.message)
+                Phase.Idle -> Unit
+            }
+        }
+
+        val planned = viewModel.tagPhase as? Phase.Planned
+        if (planned == null) {
+            Button(
+                onClick = { viewModel.startTagging() },
+                enabled = !viewModel.running && viewModel.tagFolder != null && viewModel.trackName != null,
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+            ) {
+                Icon(Icons.Filled.EditLocationAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Preview tagging")
+            }
+        } else {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+            ) {
+                OutlinedButton(
+                    onClick = { viewModel.cancelTagging() },
+                    enabled = !viewModel.running,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Cancel")
+                }
+                Button(
+                    onClick = { viewModel.confirmTagging() },
+                    enabled = !viewModel.running && planned.plan.selected.isNotEmpty(),
+                    modifier = Modifier.weight(2f),
+                ) {
+                    Text("Tag ${planned.plan.selected.size} files")
+                }
+            }
         }
     }
 }
@@ -709,8 +908,43 @@ private fun AdvancedOptions(
                 value = viewModel.toleranceMinutes,
                 onValueChange = { viewModel.toleranceMinutes = it },
                 label = { Text("Geotag tolerance (minutes)") },
+                supportingText = {
+                    Text("How far outside the track a photo may still be placed.")
+                },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            OutlinedTextField(
+                value = viewModel.clockOffsetMinutes,
+                onValueChange = { viewModel.clockOffsetMinutes = it },
+                label = { Text("Camera clock offset (minutes)") },
+                placeholder = { Text("0") },
+                supportingText = {
+                    Text("Negative if the camera runs fast. At walking pace two minutes is a couple of streets.")
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            OutlinedTextField(
+                value = viewModel.photoTimeZone,
+                onValueChange = { viewModel.photoTimeZone = it },
+                label = { Text("Camera time zone") },
+                placeholder = { Text(ZoneId.systemDefault().id) },
+                supportingText = {
+                    Text(
+                        if (viewModel.photoTimeZoneIsValid) {
+                            "Only used when the camera records no time offset. Leave blank for this device's zone."
+                        } else {
+                            "Unknown zone - using this device's zone."
+                        }
+                    )
+                },
+                isError = !viewModel.photoTimeZoneIsValid,
+                singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -804,7 +1038,7 @@ private fun SummaryCard(summary: ImportSummary) {
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
-                "${summary.rafCount} RAF · ${summary.movCount} MOV",
+                summary.breakdown,
                 style = MaterialTheme.typography.bodySmall,
             )
             val geotagLine = when {
