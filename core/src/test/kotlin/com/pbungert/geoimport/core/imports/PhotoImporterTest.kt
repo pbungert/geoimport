@@ -21,7 +21,7 @@ class PhotoImporterTest {
     private val log = mutableListOf<String>()
 
     private fun importer(extensions: Set<String> = PhotoImporter.DEFAULT_EXTENSIONS) =
-        PhotoImporter(source, dest, noExif, { log.add(it) }, extensions)
+        PhotoImporter(source, dest, CaptureTimeResolver(noExif), { log.add(it) }, extensions)
 
     private fun setUpCard(folder: String, vararg names: String) {
         source = File(tmp.root, "DCIM").also { it.mkdirs() }

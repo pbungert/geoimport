@@ -1,13 +1,7 @@
 package com.pbungert.geoimport.core.imports
 
-import com.pbungert.geoimport.core.spi.ExifDateReader
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.attribute.BasicFileAttributes
-import java.time.Instant
 import java.time.LocalDateTime
-import java.time.ZoneId
-import kotlin.math.min
 import kotlin.math.pow
 
 /**
@@ -19,7 +13,7 @@ import kotlin.math.pow
 class PhotoImporter(
     private val sourcePath: File,
     private val destBasePath: File,
-    private val exifDateReader: ExifDateReader,
+    private val captureTime: CaptureTimeResolver,
     private val log: (String) -> Unit,
     private val extensions: Set<String> = DEFAULT_EXTENSIONS,
 ) {
@@ -123,7 +117,7 @@ class PhotoImporter(
                     started = true
                     continue // skip the matched file itself
                 } else if (startTimestamp != null) {
-                    val dateTaken = getDateTaken(file)
+                    val dateTaken = captureTime.localOf(file)
                     if (dateTaken.isEqual(startTimestamp)) {
                         started = true
                         continue // skip the matched file itself
@@ -153,34 +147,6 @@ class PhotoImporter(
         return destBasePath.listFiles { f -> f.isDirectory && f.name.startsWith("Import ") }
             ?.map { it.name.replace("Import ", "").toIntOrNull() ?: 0 }
             ?.maxOrNull() ?: 0
-    }
-
-    fun getDateTaken(file: File): LocalDateTime {
-        readExifDateTaken(file)?.let { (local, _) -> return local }
-        return LocalDateTime.ofInstant(fileFallbackTime(file), ZoneId.systemDefault())
-    }
-
-    /** Date taken as an absolute instant, using the EXIF time offset when present. */
-    fun getDateTakenInstant(file: File): Instant {
-        readExifDateTaken(file)?.let { (local, offset) ->
-            return if (offset != null) local.toInstant(offset)
-            else local.atZone(ZoneId.systemDefault()).toInstant()
-        }
-        return fileFallbackTime(file)
-    }
-
-    private fun readExifDateTaken(file: File) =
-        try {
-            exifDateReader.readDateTaken(file)
-        } catch (_: Exception) {
-            null
-        }
-
-    private fun fileFallbackTime(file: File): Instant {
-        val attrs = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
-        return Instant.ofEpochMilli(
-            min(attrs.creationTime().toMillis(), attrs.lastModifiedTime().toMillis())
-        )
     }
 
     private fun importFolderName(number: Int) = "Import %02d".format(number)

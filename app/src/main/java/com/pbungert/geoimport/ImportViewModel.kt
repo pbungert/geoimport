@@ -18,6 +18,7 @@ import com.pbungert.geoimport.core.geotag.FallbackGpsWriter
 import com.pbungert.geoimport.core.geotag.Geotagger
 import com.pbungert.geoimport.core.geotag.GpsWriteResult
 import com.pbungert.geoimport.core.geotag.XmpSidecarWriter
+import com.pbungert.geoimport.core.imports.CaptureTimeResolver
 import com.pbungert.geoimport.core.imports.PhotoImporter
 import com.pbungert.geoimport.core.model.TrackPoint
 import com.pbungert.geoimport.core.track.TrackParser
@@ -29,8 +30,10 @@ import java.io.File
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import kotlin.math.roundToLong
 
 /** Coarse UI state driving the progress bar / summary, separate from the debug log. */
 sealed interface Phase {
@@ -68,6 +71,29 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     var startFilename by mutableStateOf("")
     var startTimestamp by mutableStateOf("")
     var toleranceMinutes by mutableStateOf("30")
+
+    /**
+     * Zone the camera's clock was set to, used only when it recorded no
+     * OffsetTimeOriginal. Blank means this device's zone - right when you
+     * shoot and import in the same place, wrong for a trip imported at home.
+     */
+    var photoTimeZone by mutableStateOf("")
+
+    /**
+     * Camera clock error in minutes, added to every capture time. Negative if
+     * the camera runs fast. Blank means no correction.
+     */
+    var clockOffsetMinutes by mutableStateOf("")
+
+    private val assumedZone: ZoneId
+        get() = photoTimeZone.trim().takeIf { it.isNotEmpty() }
+            ?.let { runCatching { ZoneId.of(it) }.getOrNull() }
+            ?: ZoneId.systemDefault()
+
+    private val cameraClockOffset: Duration
+        get() = Duration.ofMillis(
+            ((clockOffsetMinutes.trim().toDoubleOrNull() ?: 0.0) * 60_000).roundToLong()
+        )
 
     var trackUri by mutableStateOf<Uri?>(null)
         private set
@@ -177,7 +203,8 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val source = File(volumeDir, "DCIM")
         val destBase = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
 
-        val importer = PhotoImporter(source, destBase, AndroidExifDateReader, ::log)
+        val captureTime = CaptureTimeResolver(AndroidExifDateReader, assumedZone, cameraClockOffset)
+        val importer = PhotoImporter(source, destBase, captureTime, ::log)
         postPhase(Phase.Busy("Importing photos", 0, 0))
         val result = importer.run(startFn, startTs) { done, total ->
             postPhase(Phase.Busy("Importing photos", done, total))
@@ -196,7 +223,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             val total = result.copied.size
             postPhase(Phase.Busy("Geotagging", 0, total))
             for ((index, file) in result.copied.withIndex()) {
-                val point = geotagger.locate(importer.getDateTakenInstant(file))
+                val point = geotagger.locate(captureTime.instantOf(file))
                 if (point == null) {
                     log("No track point within tolerance for ${file.name} — not geotagged.")
                     notTagged++
