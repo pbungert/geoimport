@@ -1,0 +1,91 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test the shared core and the desktop CLI
+        run: ./gradlew :core:test :desktop:test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-reports
+          path: '**/build/reports/tests/**'
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :app:assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: geoimport-apk
+          path: app/build/outputs/apk/release/*.apk
+
+  # jpackage can only target the OS it runs on, so each platform needs its own
+  # runner - this matrix is a requirement, not an optimisation.
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: geoimport-windows
+          - os: ubuntu-latest
+            artifact: geoimport-linux
+          - os: macos-latest
+            artifact: geoimport-macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Optional: bundle exiftool for embedded CR3/NEF/ARW/HEIC support. The
+      # build succeeds without it, falling back to PATH and then to the
+      # built-in writer.
+      - name: Fetch exiftool
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -eu
+          VERSION=13.44
+          mkdir -p desktop/src/dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            curl -fsSL -o exiftool.zip "https://exiftool.org/exiftool-${VERSION}_64.zip"
+            unzip -q exiftool.zip -d unpacked
+            mv "unpacked/exiftool-${VERSION}_64" desktop/src/dist/exiftool
+            mv desktop/src/dist/exiftool/exiftool\(-k\).exe desktop/src/dist/exiftool/exiftool.exe
+          else
+            curl -fsSL -o exiftool.tar.gz "https://exiftool.org/Image-ExifTool-${VERSION}.tar.gz"
+            mkdir -p unpacked && tar xzf exiftool.tar.gz -C unpacked --strip-components=1
+            mkdir -p desktop/src/dist/exiftool
+            cp -r unpacked/exiftool unpacked/lib desktop/src/dist/exiftool/
+            chmod +x desktop/src/dist/exiftool/exiftool
+          fi
+
+      - run: ./gradlew :desktop:jpackageImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: desktop/build/jpackage/

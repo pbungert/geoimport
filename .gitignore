@@ -56,3 +56,6 @@ desktop.ini
 
 # Google services 
 google-services.json
+
+# Bundled exiftool, fetched per platform at package time
+desktop/src/dist/
