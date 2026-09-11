@@ -1,6 +1,9 @@
 package com.pbungert.geoimport.core.imports
 
+import com.pbungert.geoimport.core.geotag.Geotagger
+import com.pbungert.geoimport.core.geotag.GpsWriter
 import java.io.File
+import java.io.IOException
 import java.time.LocalDateTime
 import kotlin.math.pow
 
@@ -26,28 +29,81 @@ class PhotoImporter(
         startFilename: String?,
         startTimestamp: LocalDateTime?,
         onCopyProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
-    ): ImportResult {
-        val sourceFiles = collectSourceFiles(sourcePath) ?: return ImportResult(emptyList(), null)
+    ): ImportResult = execute(plan(startFilename, startTimestamp), onCopyProgress)
+
+    /**
+     * Works out what would be copied, and where, without creating anything.
+     *
+     * Pass [geotagger] and [writer] to resolve each file's position and the
+     * writer that would handle it, so a preview can show the outcome before
+     * committing to it.
+     */
+    fun plan(
+        startFilename: String?,
+        startTimestamp: LocalDateTime?,
+        geotagger: Geotagger? = null,
+        writer: GpsWriter? = null,
+    ): ImportPlan {
+        val destFolder = File(destBasePath, importFolderName(findHighestImportNumber() + 1))
+        val sourceFiles = collectSourceFiles(sourcePath)
+            ?: return ImportPlan(sourcePath, destFolder, null, emptyList())
 
         log("Found ${describe(sourceFiles)}.")
 
         val (resolvedFilename, resolvedTimestamp) = resolveStartCriteria(startFilename, startTimestamp)
         val filesToCopy = filterNewFiles(sourceFiles, resolvedFilename, resolvedTimestamp)
         log("After filtering, ${filesToCopy.size} files will be copied.")
-        if (filesToCopy.isEmpty()) return ImportResult(emptyList(), null)
 
-        val destFolder = createNextImportFolder()
+        val entries = filesToCopy.map { file ->
+            val time = captureTime.instantOf(file)
+            val fix = geotagger?.locate(time)
+            PlannedFile(
+                source = file,
+                destination = File(destFolder, file.name),
+                captureTime = time,
+                fix = fix,
+                writer = if (fix == null) null else writer?.effectiveWriterFor(file)?.name,
+            )
+        }
+        return ImportPlan(sourcePath, destFolder, resolvedFilename, entries)
+    }
+
+    /**
+     * Copies the selected files. A file that cannot be copied is reported and
+     * skipped rather than aborting the run: the old behaviour left a
+     * half-populated folder, which then became the resume watermark.
+     */
+    fun execute(
+        plan: ImportPlan,
+        onCopyProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): ImportResult {
+        val selected = plan.selected
+        if (selected.isEmpty()) return ImportResult(emptyList(), null)
+
+        log("Creating destination folder: ${plan.destFolder.path}...")
+        plan.destFolder.mkdirs()
+
         val copied = mutableListOf<File>()
-        val total = filesToCopy.size
+        val failed = mutableListOf<String>()
+        val total = selected.size
         onCopyProgress(0, total)
-        for ((index, file) in filesToCopy.withIndex()) {
-            log("Copying ${file.name}...")
-            val dest = file.copyTo(File(destFolder, file.name), overwrite = false)
-            dest.setLastModified(file.lastModified())
-            copied.add(dest)
+        for ((index, entry) in selected.withIndex()) {
+            log("Copying ${entry.source.name}...")
+            try {
+                val dest = entry.source.copyTo(entry.destination, overwrite = false)
+                dest.setLastModified(entry.source.lastModified())
+                copied.add(dest)
+            } catch (e: Exception) {
+                log("Could not copy ${entry.source.name}: ${e.message ?: e}")
+                failed.add(entry.source.name)
+            }
             onCopyProgress(index + 1, total)
         }
-        return ImportResult(copied, destFolder)
+        if (failed.isNotEmpty()) {
+            log("${failed.size} of $total files could not be copied: ${failed.joinToString(", ")}")
+        }
+        if (copied.isEmpty()) throw IOException("no files could be copied")
+        return ImportResult(copied, plan.destFolder)
     }
 
     private fun collectSourceFiles(basePath: File): List<File>? {
@@ -131,14 +187,6 @@ class PhotoImporter(
         }
 
         return result
-    }
-
-    private fun createNextImportFolder(): File {
-        destBasePath.mkdirs()
-        val folder = File(destBasePath, importFolderName(findHighestImportNumber() + 1))
-        log("Creating destination folder: ${folder.path}...")
-        folder.mkdirs()
-        return folder
     }
 
     private fun findHighestImportNumber(): Int {

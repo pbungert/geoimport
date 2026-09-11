@@ -28,4 +28,10 @@ interface GpsWriter {
     fun supports(file: File): Boolean
 
     fun write(file: File, point: TrackPoint): GpsWriteResult
+
+    /**
+     * The writer that would actually handle [file] - itself, unless this is a
+     * chain. Lets a dry run name the real backend instead of the chain.
+     */
+    fun effectiveWriterFor(file: File): GpsWriter? = if (supports(file)) this else null
 }

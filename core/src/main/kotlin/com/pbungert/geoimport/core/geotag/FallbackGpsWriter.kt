@@ -21,12 +21,12 @@ class FallbackGpsWriter(
         require(writers.isNotEmpty()) { "a writer chain needs at least one writer" }
     }
 
-    override val name = writers.joinToString(" → ") { it.name }
+    override val name = writers.joinToString(" -> ") { it.name }
 
     override fun supports(file: File) = writers.any { it.supports(file) }
 
-    /** The writer that would handle [file], for dry-run plans. */
-    fun writerFor(file: File): GpsWriter? = writers.firstOrNull { it.supports(file) }
+    override fun effectiveWriterFor(file: File): GpsWriter? =
+        writers.firstOrNull { it.supports(file) }?.effectiveWriterFor(file)
 
     override fun write(file: File, point: TrackPoint): GpsWriteResult {
         var last: Exception? = null

@@ -272,7 +272,7 @@ object MovGpsWriter {
     }
 
     /** `©xyz` — the © is byte 0xA9, hence the Latin-1 round trip everywhere. */
-    private const val LOCATION_TYPE = "©xyz"
+    private const val LOCATION_TYPE = "\u00A9xyz"
 
     /** Packed ISO-639-2/T "eng", the value Apple and exiftool write. */
     private const val LANGUAGE_ENG = 0x15C7
