@@ -21,8 +21,12 @@ class PhotoImporter(
     private val destBasePath: File,
     private val exifDateReader: ExifDateReader,
     private val log: (String) -> Unit,
+    private val extensions: Set<String> = DEFAULT_EXTENSIONS,
 ) {
     data class ImportResult(val copied: List<File>, val destFolder: File?)
+
+    /** Files this importer will pick up — also what a resume point may name. */
+    fun isImportable(file: File) = file.extension.lowercase() in extensions
 
     fun run(
         startFilename: String?,
@@ -31,10 +35,7 @@ class PhotoImporter(
     ): ImportResult {
         val sourceFiles = collectSourceFiles(sourcePath) ?: return ImportResult(emptyList(), null)
 
-        log(
-            "Found ${sourceFiles.count { it.extension.equals("raf", ignoreCase = true) }} RAF files " +
-                "and ${sourceFiles.count { it.extension.equals("mov", ignoreCase = true) }} MOV files."
-        )
+        log("Found ${describe(sourceFiles)}.")
 
         val (resolvedFilename, resolvedTimestamp) = resolveStartCriteria(startFilename, startTimestamp)
         val filesToCopy = filterNewFiles(sourceFiles, resolvedFilename, resolvedTimestamp)
@@ -62,14 +63,10 @@ class PhotoImporter(
         }
 
         val files = mutableListOf<File>()
-        basePath.listFiles { f -> f.isDirectory && FUJI_FOLDER_PATTERN.matches(f.name) }
+        basePath.listFiles { f -> f.isDirectory && DCF_FOLDER_PATTERN.matches(f.name) }
             ?.sortedBy { it.name }
             ?.forEach { dir ->
-                dir.listFiles { f ->
-                    f.isFile &&
-                        (f.extension.equals("raf", ignoreCase = true) ||
-                            f.extension.equals("mov", ignoreCase = true))
-                }?.let { files.addAll(it) }
+                dir.listFiles { f -> f.isFile && isImportable(f) }?.let { files.addAll(it) }
             }
         return files
     }
@@ -90,8 +87,14 @@ class PhotoImporter(
         val highestNumber = findHighestImportNumber()
         if (highestNumber > 0) {
             val lastFolder = File(destBasePath, importFolderName(highestNumber))
+            // Only importable files may become the watermark. Geotagging
+            // leaves .xmp sidecars in this folder, and a sidecar shares its
+            // sequence number with the photo it belongs to — so picking one
+            // would yield a name that matches nothing on the card, leaving
+            // `started` false in filterNewFiles and silently importing zero
+            // files on every subsequent run.
             val lastFile = sortByFilenameChronological(
-                lastFolder.listFiles()?.filter { it.isFile } ?: emptyList()
+                lastFolder.listFiles()?.filter { it.isFile && isImportable(it) } ?: emptyList()
             ).lastOrNull()
             if (lastFile != null) {
                 log("Starting after '${lastFile.name}' from '${lastFolder.path}'")
@@ -183,7 +186,27 @@ class PhotoImporter(
     private fun importFolderName(number: Int) = "Import %02d".format(number)
 
     companion object {
-        val FUJI_FOLDER_PATTERN = Regex("""^\d{3}_FUJI$""")
+        /**
+         * DCF directory names: three digits plus five free characters, so
+         * `101_FUJI` as well as `100CANON`, `100MSDCF`, `100OLYMP`.
+         */
+        val DCF_FOLDER_PATTERN = Regex("""^\d{3}[0-9A-Za-z_]{5}$""")
+
+        /**
+         * Formats collected by default. Anything the built-in writer cannot
+         * embed into still imports and gets an XMP sidecar.
+         */
+        val DEFAULT_EXTENSIONS = setOf("raf", "jpg", "jpeg", "mov", "mp4")
+
+        /** Counts per extension, e.g. "12 RAF, 3 MOV" — no format is hardcoded. */
+        fun describe(files: List<File>): String {
+            if (files.isEmpty()) return "no files"
+            return files.groupingBy { it.extension.uppercase() }
+                .eachCount()
+                .entries
+                .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+                .joinToString(", ") { "${it.value} ${it.key}" }
+        }
 
         /** The last run of digits in the filename. */
         val FILENAME_SEQUENCE_PATTERN = Regex("""(\d+)(?!.*\d)""")

@@ -1,12 +1,8 @@
 package com.pbungert.geoimport.core.geotag
 
 import com.pbungert.geoimport.core.model.TrackPoint
-import java.io.File
 import java.time.Duration
 import java.time.Instant
-import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.roundToLong
 
 /**
  * Matches photo capture times against a track. Positions between two track
@@ -41,38 +37,5 @@ class Geotagger(track: List<TrackPoint>, private val tolerance: Duration) {
             lon = a.lon + (b.lon - a.lon) * f,
             ele = if (a.ele != null && b.ele != null) a.ele + (b.ele - a.ele) * f else a.ele ?: b.ele,
         )
-    }
-
-    /** Writes `<photo>.xmp` next to the photo and returns the sidecar file. */
-    fun writeSidecar(photo: File, point: TrackPoint): File {
-        val sidecar = File(photo.parentFile, photo.nameWithoutExtension + ".xmp")
-        sidecar.writeText(buildXmp(point))
-        return sidecar
-    }
-
-    private fun buildXmp(p: TrackPoint): String = buildString {
-        append("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n")
-        append(" <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n")
-        append("  <rdf:Description rdf:about=\"\"\n")
-        append("    xmlns:exif=\"http://ns.adobe.com/exif/1.0/\"\n")
-        append("    exif:GPSVersionID=\"2.3.0.0\"\n")
-        append("    exif:GPSLatitude=\"${formatCoordinate(p.lat, 'N', 'S')}\"\n")
-        append("    exif:GPSLongitude=\"${formatCoordinate(p.lon, 'E', 'W')}\"\n")
-        p.ele?.let { ele ->
-            append("    exif:GPSAltitude=\"${(abs(ele) * 1000).roundToLong()}/1000\"\n")
-            append("    exif:GPSAltitudeRef=\"${if (ele < 0) 1 else 0}\"\n")
-        }
-        append("  />\n")
-        append(" </rdf:RDF>\n")
-        append("</x:xmpmeta>\n")
-    }
-
-    /** XMP GPS format: degrees,decimal-minutes plus hemisphere, e.g. "48,7.634512N". */
-    private fun formatCoordinate(value: Double, positive: Char, negative: Char): String {
-        val hemisphere = if (value >= 0) positive else negative
-        val abs = abs(value)
-        val degrees = abs.toInt()
-        val minutes = (abs - degrees) * 60
-        return String.format(Locale.US, "%d,%.6f%c", degrees, minutes, hemisphere)
     }
 }

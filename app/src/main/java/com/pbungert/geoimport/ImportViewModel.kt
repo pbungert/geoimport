@@ -13,8 +13,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.pbungert.geoimport.core.geotag.BuiltInGpsWriter
+import com.pbungert.geoimport.core.geotag.FallbackGpsWriter
 import com.pbungert.geoimport.core.geotag.Geotagger
-import com.pbungert.geoimport.core.geotag.RafGpsWriter
+import com.pbungert.geoimport.core.geotag.GpsWriteResult
+import com.pbungert.geoimport.core.geotag.XmpSidecarWriter
 import com.pbungert.geoimport.core.imports.PhotoImporter
 import com.pbungert.geoimport.core.model.TrackPoint
 import com.pbungert.geoimport.core.track.TrackParser
@@ -53,7 +56,13 @@ data class ImportSummary(
 
 class ImportViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val rafGpsWriter = RafGpsWriter(AndroidJpegGpsWriter)
+    /** Embed where possible, sidecar otherwise; never lose a position. */
+    private val gpsWriter = FallbackGpsWriter(
+        listOf(BuiltInGpsWriter(AndroidJpegGpsWriter), XmpSidecarWriter),
+        onFallback = { file, writer, e ->
+            log("${writer.name} write failed for ${file.name} (${e.message ?: e}) - falling back.")
+        },
+    )
 
     // Options mirroring the script's arguments
     var startFilename by mutableStateOf("")
@@ -194,24 +203,18 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                     postPhase(Phase.Busy("Geotagging", index + 1, total))
                     continue
                 }
-                if (file.extension.equals("raf", ignoreCase = true)) {
-                    // Lightroom for Android ignores XMP sidecars, so the GPS
-                    // position has to live in the RAF's EXIF block itself.
-                    try {
-                        rafGpsWriter.writeGps(file, point)
-                        exifTagged++
-                    } catch (e: Exception) {
-                        log(
-                            "EXIF write failed for ${file.name} (${e.message ?: e}) — " +
-                                "writing XMP sidecar instead."
-                        )
-                        geotagger.writeSidecar(file, point)
-                        sidecarTagged++
+                // The chain embeds where it can — Lightroom for Android ignores
+                // XMP sidecars, so a RAF position has to live in its EXIF block
+                // — and falls back to a sidecar for anything else. A file that
+                // fails outright is reported and the run continues.
+                try {
+                    when (gpsWriter.write(file, point)) {
+                        is GpsWriteResult.Embedded -> exifTagged++
+                        is GpsWriteResult.Sidecar -> sidecarTagged++
                     }
-                } else {
-                    // Videos carry no EXIF; leave a sidecar for desktop tools.
-                    geotagger.writeSidecar(file, point)
-                    sidecarTagged++
+                } catch (e: Exception) {
+                    log("Could not geotag ${file.name}: ${e.message ?: e}")
+                    notTagged++
                 }
                 postPhase(Phase.Busy("Geotagging", index + 1, total))
             }
