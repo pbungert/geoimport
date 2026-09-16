@@ -71,7 +71,7 @@ class TracksList : CliktCommand(name = "list") {
 
     override fun run() {
         val files = tracksDir.listFiles { f ->
-            f.isFile && f.extension.lowercase() in setOf("gpx", "kml")
+            f.isFile && f.extension.lowercase() in TRACK_EXTENSIONS
         }?.sortedByDescending { it.lastModified() }.orEmpty()
 
         if (files.isEmpty()) {

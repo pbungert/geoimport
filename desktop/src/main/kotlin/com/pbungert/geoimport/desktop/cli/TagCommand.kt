@@ -13,6 +13,7 @@ import com.github.ajalt.clikt.parameters.types.file
 import com.pbungert.geoimport.core.geotag.Geotagger
 import com.pbungert.geoimport.core.geotag.GpsWriteResult
 import com.pbungert.geoimport.core.imports.PhotoImporter
+import com.pbungert.geoimport.core.track.TrackSelection
 import java.io.File
 
 /**
@@ -48,15 +49,11 @@ class TagCommand : CliktCommand(name = "tag") {
     private val geotag by GeotagOptions()
 
     override fun run() {
-        val trackFile = geotag.track ?: throw UsageError("--track is required for tagging")
-        val track = try {
-            geotag.parseTrack()
-        } catch (e: Exception) {
-            throw UsageError("Could not read track file: ${e.message ?: e}")
+        if (!geotag.hasTrackSource) {
+            throw UsageError("--track or --tracks-dir is required for tagging")
         }
-        if (track == null || track.isEmpty) {
-            throw UsageError("${trackFile.name} contains no timestamped points.")
-        }
+        val available = geotag.namedTracks()
+        if (available.isEmpty()) throw UsageError("No readable tracks with timestamped points.")
 
         val wanted = extensions.map { it.trim().removePrefix(".").lowercase() }.toSet()
         val files = (if (recursive) folder.walkTopDown() else folder.walkTopDown().maxDepth(1))
@@ -69,8 +66,14 @@ class TagCommand : CliktCommand(name = "tag") {
             return
         }
 
-        val geotagger = Geotagger(track, geotag.tolerance())
         val captureTime = geotag.captureTimeResolver()
+        val timed = files.map { it to captureTime.instantOf(it) }
+
+        val choice = TrackSelection.choose(available, timed.map { it.second }, geotag.tolerance())
+        choice.lines().forEach { echo(it) }
+        if (choice.used.isEmpty()) return
+        val geotagger = Geotagger(choice.track, geotag.tolerance())
+
         val writer = geotag.writerChain { file, w, e ->
             echo("  ${w.name} failed on ${file.name} (${e.message ?: e}) - falling back", err = true)
         }
@@ -81,8 +84,7 @@ class TagCommand : CliktCommand(name = "tag") {
         var skipped = 0
         var failed = 0
 
-        for (file in files) {
-            val time = captureTime.instantOf(file)
+        for ((file, time) in timed) {
             val fix = geotagger.locate(time)
             if (fix == null) {
                 echo("  ${file.name.padEnd(nameWidth)}  $time  no match within tolerance")

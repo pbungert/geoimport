@@ -1,8 +1,10 @@
 package com.pbungert.geoimport.desktop.cli
 
+import com.github.ajalt.clikt.core.UsageError
 import com.github.ajalt.clikt.parameters.groups.OptionGroup
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.flag
+import com.github.ajalt.clikt.parameters.options.multiple
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.double
 import com.github.ajalt.clikt.parameters.types.file
@@ -12,6 +14,7 @@ import com.pbungert.geoimport.core.geotag.FallbackGpsWriter
 import com.pbungert.geoimport.core.geotag.GpsWriter
 import com.pbungert.geoimport.core.geotag.XmpSidecarWriter
 import com.pbungert.geoimport.core.imports.CaptureTimeResolver
+import com.pbungert.geoimport.core.track.NamedTrack
 import com.pbungert.geoimport.core.track.TrackParser
 import com.pbungert.geoimport.desktop.platform.DesktopExifDateReader
 import com.pbungert.geoimport.desktop.platform.DesktopJpegGpsWriter
@@ -23,12 +26,22 @@ import java.time.ZoneId
 /** Options shared by `import` and `tag`. */
 class GeotagOptions : OptionGroup("Geotagging") {
 
-    val track: File? by option("--track", "-t", help = "GPX or KML file to match photos against")
-        .file(mustExist = true, canBeDir = false, mustBeReadable = true)
+    val tracks: List<File> by option(
+        "--track", "-t",
+        help = "GPX or KML file to match photos against. Repeat it for several; " +
+            "only the ones covering the photos are used",
+    ).file(mustExist = true, canBeDir = false, mustBeReadable = true).multiple()
+
+    val tracksDir: File? by option(
+        "--tracks-dir",
+        help = "Directory of .gpx/.kml files to choose from, such as where 'tracks pull' " +
+            "leaves them. The ones covering the photos are used and the rest ignored",
+    ).file(mustExist = true, canBeFile = false, mustBeReadable = true)
 
     val toleranceMinutes: Long by option(
         "--tolerance",
-        help = "How far outside the track's time range a photo may still be placed, in minutes",
+        help = "How far outside a recorded stretch of track a photo may still be placed, " +
+            "in minutes. Also decides which tracks count as covering the photos",
     ).long().default(30)
 
     val photoZone: String? by option(
@@ -62,7 +75,38 @@ class GeotagOptions : OptionGroup("Geotagging") {
 
     fun tolerance(): Duration = Duration.ofMinutes(toleranceMinutes)
 
-    fun parseTrack() = track?.inputStream()?.use { TrackParser.parse(it, zoneOf(trackZone, "--track-tz")) }
+    /** True when the user asked for geotagging at all. */
+    val hasTrackSource get() = tracks.isNotEmpty() || tracksDir != null
+
+    /**
+     * Every track on offer, named by filename. A file named with `--track` is
+     * meant to be used, so a broken one stops the run; one that merely turned
+     * up in `--tracks-dir` is skipped, because a directory of recordings will
+     * eventually hold something unreadable and that is no reason to refuse.
+     */
+    fun namedTracks(): List<NamedTrack> {
+        val zone = zoneOf(trackZone, "--track-tz")
+        val named = tracks.map { file ->
+            val track = try {
+                file.inputStream().use { TrackParser.parse(it, zone) }
+            } catch (e: Exception) {
+                throw UsageError("Could not read ${file.name}: ${e.message ?: e}")
+            }
+            if (track.isEmpty) throw UsageError("${file.name} contains no timestamped points.")
+            NamedTrack(file.nameWithoutExtension, track)
+        }
+        val scanned = tracksDir
+            ?.listFiles { f -> f.isFile && f.extension.lowercase() in TRACK_EXTENSIONS }
+            ?.sortedBy { it.name }
+            ?.mapNotNull { file ->
+                runCatching { file.inputStream().use { TrackParser.parse(it, zone) } }
+                    .getOrNull()
+                    ?.takeIf { !it.isEmpty }
+                    ?.let { NamedTrack(file.nameWithoutExtension, it) }
+            }
+            .orEmpty()
+        return (named + scanned).distinctBy { it.name }
+    }
 
     /**
      * exiftool first when present, then the portable writer, then a sidecar so
@@ -87,6 +131,9 @@ class GeotagOptions : OptionGroup("Geotagging") {
         }
     }
 }
+
+/** What `--tracks-dir` and `tracks list` recognise as a track file. */
+val TRACK_EXTENSIONS = setOf("gpx", "kml")
 
 /**
  * Directory of the installed application, where jpackage puts the bundled

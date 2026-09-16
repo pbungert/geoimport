@@ -42,7 +42,9 @@ object TrackSelection {
          */
         fun lines(zone: ZoneId = ZoneId.systemDefault()): List<String> {
             val total = used.size + skipped.size
-            if (total == 0) return emptyList()
+            // Nothing to match, or nothing to match it against: either way the
+            // caller has something better to report than the state of the tracks.
+            if (total == 0 || photos == null) return emptyList()
             val range = photos?.let { "${format(it.start, zone)} to ${format(it.endInclusive, zone)}" }
 
             if (used.isEmpty()) {
@@ -50,9 +52,11 @@ object TrackSelection {
                     skipped.mapNotNull { named -> named.track.span?.let { named to it } }
                         .minByOrNull { (_, span) -> distanceTo(span, p) }
                 }
+                val subject =
+                    if (total == 1) "The only track does not cover"
+                    else "None of the $total tracks cover"
                 return listOfNotNull(
-                    "None of the $total tracks cover these photos" +
-                        (range?.let { " ($it)" } ?: "") + ".",
+                    "$subject these photos" + (range?.let { " ($it)" } ?: "") + ".",
                     nearest?.let { (named, span) ->
                         "Nearest is ${named.name}: " +
                             "${format(span.start, zone)} to ${format(span.endInclusive, zone)}. " +

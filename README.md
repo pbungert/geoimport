@@ -26,8 +26,34 @@ rewriting, is the same code on both.
 ## Geotagging
 
 Positions are linearly interpolated between the two track points bracketing a
-photo's capture time. Outside the track's range the nearest endpoint is used,
-but only within `--tolerance`.
+photo's capture time. Outside a recorded stretch of track the nearest end of
+one is used, but only within `--tolerance`.
+
+A track keeps the segments it was recorded in — a GPX `<trkseg>`, a KML
+`gx:Track`, and each file when several are merged. Inside a segment the device
+was recording throughout, so a gap is a dropout and its two ends really do
+bracket where the device went; `ImportPlan.acrossWideGap` reports how far, so
+an inferred position can be told from a measured one. Between segments nothing
+was recorded, and the straight line across is not a route anybody took, so
+photos there need the tolerance to reach an end.
+
+## Choosing tracks
+
+An outing is usually several recordings, and geotagging one import should not
+mean picking the right files out of a folder by hand. Both front ends take as
+many tracks as you like and work out which of them apply:
+
+- Desktop: repeat `--track`, or point `--tracks-dir` at a folder.
+- Android: the recording folder is used by default, and the picker takes
+  several files at once.
+
+The photos decide. `PhotoImporter.plan` resolves capture times first, then asks
+for a geotagger, and `TrackSelection` keeps the tracks whose recorded span
+reaches the photo range padded by `--tolerance`. Errors fail safe in one
+direction: the range is a union, so an odd capture time can only pull in more
+tracks, never drop one that would have matched. When nothing overlaps, both
+front ends say so and name the nearest track — that is nearly always a wrong
+camera clock or `--photo-tz`, and silence there is expensive.
 
 Writers are tried in order, and a failure falls through rather than losing the
 position:
@@ -60,10 +86,13 @@ Two corrections, both explicit because both are easy to get silently wrong:
 ## Desktop
 
 ```
-geoimport import <card> --dest <dir> [--track T] [--dry-run] [--resume ...]
-geoimport tag <folder> --track T [--recursive] [--dry-run]
+geoimport import <card> --dest <dir> [--track T ...] [--tracks-dir D] [--dry-run] [--resume ...]
+geoimport tag <folder> (--track T ... | --tracks-dir D) [--recursive] [--dry-run]
 geoimport tracks pull|list
 ```
+
+`--tracks-dir` pairs with `tracks pull`: pull the phone's recordings once, then
+point every import at the folder and let it pick.
 
 `--dry-run` prints the same `ImportPlan` the import consumes, so the preview
 cannot disagree with what happens. The Android preview screen renders that

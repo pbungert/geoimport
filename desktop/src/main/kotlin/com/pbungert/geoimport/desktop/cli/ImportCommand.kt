@@ -13,6 +13,7 @@ import com.pbungert.geoimport.core.geotag.Geotagger
 import com.pbungert.geoimport.core.geotag.GpsWriteResult
 import com.pbungert.geoimport.core.imports.ImportPlan
 import com.pbungert.geoimport.core.imports.PhotoImporter
+import com.pbungert.geoimport.core.track.TrackSelection
 import java.io.File
 
 class ImportCommand : CliktCommand(name = "import") {
@@ -45,16 +46,11 @@ class ImportCommand : CliktCommand(name = "import") {
 
     override fun run() {
         val dcim = if (File(source, "DCIM").isDirectory) File(source, "DCIM") else source
-        val track = try {
-            geotag.parseTrack()
-        } catch (e: Exception) {
-            throw UsageError("Could not read track file: ${e.message ?: e}")
-        }
-        if (geotag.track != null && track?.isEmpty != false) {
-            throw UsageError("Track file contains no timestamped points - nothing to geotag with.")
+        val available = geotag.namedTracks()
+        if (geotag.hasTrackSource && available.isEmpty()) {
+            throw UsageError("No readable tracks with timestamped points - nothing to geotag with.")
         }
 
-        val geotagger = track?.let { Geotagger(it, geotag.tolerance()) }
         val writer = geotag.writerChain { file, w, e ->
             echo("  ${w.name} failed on ${file.name} (${e.message ?: e}) - falling back", err = true)
         }
@@ -66,8 +62,18 @@ class ImportCommand : CliktCommand(name = "import") {
             log = { if (dryRun) Unit else echo(it) },
         )
 
+        // Which tracks to use is settled inside plan(), once the capture times
+        // of the files being imported are known. Said out loud in both modes:
+        // a dry run is exactly where you want to see what it picked.
+        var geotagger: Geotagger? = null
         val (startFilename, startTimestamp) = parseResume(resume)
-        val plan = importer.plan(startFilename, startTimestamp, writer) { geotagger }
+        val plan = importer.plan(startFilename, startTimestamp, writer) { times ->
+            val choice = TrackSelection.choose(available, times, geotag.tolerance())
+            choice.lines().forEach { echo(it) }
+            choice.used.takeIf { it.isNotEmpty() }
+                ?.let { Geotagger(choice.track, geotag.tolerance()) }
+                .also { geotagger = it }
+        }
 
         if (plan.isEmpty) {
             echo("Nothing to import.")
