@@ -1,5 +1,6 @@
 package com.pbungert.geoimport.core.track
 
+import com.pbungert.geoimport.core.model.Track
 import com.pbungert.geoimport.core.model.TrackPoint
 import org.xml.sax.Attributes
 import org.xml.sax.SAXException
@@ -18,6 +19,11 @@ import javax.xml.parsers.SAXParserFactory
  * element) or a KML file (gx:Track when/coord pairs, or Placemarks with a
  * TimeStamp and a Point). Points without a usable timestamp are skipped.
  *
+ * The file's own segmentation is preserved: each trkseg, rte and gx:Track
+ * becomes one segment of the returned [Track], and loose waypoints or
+ * timestamped placemarks become another. What that buys is described on
+ * [Track] itself.
+ *
  * Uses SAX rather than StAX because this runs on Android too, where
  * javax.xml.stream does not exist.
  */
@@ -31,7 +37,7 @@ object TrackParser {
     fun parse(
         input: InputStream,
         zoneForLocalTimes: ZoneId = ZoneId.systemDefault(),
-    ): List<TrackPoint> {
+    ): Track {
         val handler = TrackHandler(zoneForLocalTimes)
         try {
             newParser().parse(input, handler)
@@ -39,7 +45,7 @@ object TrackParser {
             (e.cause as? IllegalArgumentException)?.let { throw it }
             throw IllegalArgumentException("Could not parse track file: ${e.message}", e)
         }
-        return handler.points.sortedBy { it.time }
+        return Track(handler.finish())
     }
 
     private fun newParser() = SAXParserFactory.newInstance().apply {
@@ -50,7 +56,21 @@ object TrackParser {
 
     private class TrackHandler(private val zone: ZoneId) : DefaultHandler() {
 
-        val points = mutableListOf<TrackPoint>()
+        private val segments = mutableListOf<List<TrackPoint>>()
+        private val current = mutableListOf<TrackPoint>()
+
+        /** Ends the segment being collected; empty ones are dropped. */
+        private fun endSegment() {
+            if (current.isNotEmpty()) {
+                segments.add(current.sortedBy { it.time })
+                current.clear()
+            }
+        }
+
+        fun finish(): List<List<TrackPoint>> {
+            endSegment()
+            return segments.toList()
+        }
 
         private var isGpx = false
         private var rootSeen = false
@@ -90,6 +110,10 @@ object TrackParser {
 
             if (isGpx) {
                 when (localName) {
+                    // A fresh stretch of recording starts here, so whatever was
+                    // being collected before it - loose waypoints, the previous
+                    // segment - must not run into it.
+                    "trkseg", "rte" -> endSegment()
                     "trkpt", "rtept", "wpt" -> {
                         val pLat = attrs.getValue("lat")?.toDoubleOrNull()
                         val pLon = attrs.getValue("lon")?.toDoubleOrNull()
@@ -105,7 +129,10 @@ object TrackParser {
                 }
             } else {
                 when (localName) {
-                    "Track" -> trackDepth++
+                    "Track" -> {
+                        if (trackDepth == 0) endSegment()
+                        trackDepth++
+                    }
                     "TimeStamp" -> inTimeStamp = true
                     "Point" -> inKmlPoint = true
                 }
@@ -128,9 +155,10 @@ object TrackParser {
                         accuracy = body.trim().toDoubleOrNull()
                     }
                     "trkpt", "rtept", "wpt" -> if (inPoint) {
-                        time?.let { points.add(TrackPoint(it, lat, lon, ele, accuracy)) }
+                        time?.let { current.add(TrackPoint(it, lat, lon, ele, accuracy)) }
                         inPoint = false
                     }
+                    "trkseg", "rte" -> endSegment()
                 }
                 return
             }
@@ -152,11 +180,12 @@ object TrackParser {
                             val c = coords[i]
                             // KML coordinates are lon,lat[,alt]
                             if (t != null && c != null) {
-                                points.add(TrackPoint(t, c[1], c[0], c.getOrNull(2)))
+                                current.add(TrackPoint(t, c[1], c[0], c.getOrNull(2)))
                             }
                         }
                         whens.clear()
                         coords.clear()
+                        endSegment()
                     }
                 }
                 "TimeStamp" -> inTimeStamp = false
@@ -165,7 +194,7 @@ object TrackParser {
                     val t = placemarkWhen
                     val c = placemarkCoord
                     if (t != null && c != null) {
-                        points.add(TrackPoint(t, c[1], c[0], c.getOrNull(2)))
+                        current.add(TrackPoint(t, c[1], c[0], c.getOrNull(2)))
                     }
                     placemarkWhen = null
                     placemarkCoord = null

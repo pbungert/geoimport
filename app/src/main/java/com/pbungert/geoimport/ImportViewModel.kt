@@ -24,7 +24,7 @@ import com.pbungert.geoimport.core.imports.CaptureTimeResolver
 import com.pbungert.geoimport.core.imports.ImportPlan
 import com.pbungert.geoimport.core.imports.PlannedFile
 import com.pbungert.geoimport.core.imports.PhotoImporter
-import com.pbungert.geoimport.core.model.TrackPoint
+import com.pbungert.geoimport.core.model.Track
 import com.pbungert.geoimport.core.track.TrackParser
 import com.pbungert.geoimport.platform.AndroidExifDateReader
 import com.pbungert.geoimport.platform.AndroidJpegGpsWriter
@@ -130,8 +130,8 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     var trackName by mutableStateOf<String?>(null)
         private set
 
-    /** Points of the selected track for the map preview; null while unparsed. */
-    var trackPoints by mutableStateOf<List<TrackPoint>?>(null)
+    /** The selected track, for the map preview; null while unparsed. */
+    var trackPoints by mutableStateOf<Track?>(null)
         private set
 
     var running by mutableStateOf(false)
@@ -175,11 +175,11 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                 getApplication<Application>().contentResolver
                     .openInputStream(uri)!!.use { TrackParser.parse(it) }
             } catch (_: Exception) {
-                emptyList()
+                Track.EMPTY
             }
             launch(Dispatchers.Main.immediate) {
                 if (trackUri != uri) return@launch
-                if (points.isEmpty() && onFailure != null) onFailure() else trackPoints = points
+                if (points.isEmpty && onFailure != null) onFailure() else trackPoints = points
             }
         }
     }
@@ -273,7 +273,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         when {
             track == null ->
                 log("No track file selected — importing without geotagging.")
-            track.isEmpty() -> {
+            track.isEmpty -> {
                 fail("Track file contains no timestamped points — cannot geotag.")
                 return
             }
@@ -447,7 +447,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             postTagPhase(Phase.Failed("Failed to read track file: ${e.message ?: e}"))
             return
         }
-        if (track.isEmpty()) {
+        if (track.isEmpty) {
             postTagPhase(Phase.Failed("Track file contains no timestamped points."))
             return
         }

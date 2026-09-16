@@ -50,7 +50,7 @@ class ImportCommand : CliktCommand(name = "import") {
         } catch (e: Exception) {
             throw UsageError("Could not read track file: ${e.message ?: e}")
         }
-        if (geotag.track != null && track.isNullOrEmpty()) {
+        if (geotag.track != null && track?.isEmpty != false) {
             throw UsageError("Track file contains no timestamped points - nothing to geotag with.")
         }
 

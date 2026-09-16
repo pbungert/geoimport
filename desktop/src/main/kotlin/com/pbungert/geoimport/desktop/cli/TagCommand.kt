@@ -54,7 +54,7 @@ class TagCommand : CliktCommand(name = "tag") {
         } catch (e: Exception) {
             throw UsageError("Could not read track file: ${e.message ?: e}")
         }
-        if (track.isNullOrEmpty()) {
+        if (track == null || track.isEmpty) {
             throw UsageError("${trackFile.name} contains no timestamped points.")
         }
 

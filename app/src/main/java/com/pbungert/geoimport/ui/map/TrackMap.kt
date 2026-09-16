@@ -37,7 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.pbungert.geoimport.core.model.TrackPoint
+import com.pbungert.geoimport.core.model.Track
 import kotlinx.coroutines.launch
 import org.maplibre.compose.camera.CameraPosition
 import org.maplibre.compose.camera.rememberCameraState
@@ -58,12 +58,18 @@ import org.maplibre.compose.sources.rememberGeoJsonSource
 import org.maplibre.compose.style.BaseStyle
 import org.maplibre.compose.style.rememberStyleState
 import org.maplibre.spatialk.geojson.BoundingBox
-import org.maplibre.spatialk.geojson.LineString
+import org.maplibre.spatialk.geojson.MultiLineString
 import org.maplibre.spatialk.geojson.Point
 import org.maplibre.spatialk.geojson.Position
 
-/** A named list of track points ready to be drawn on a map. */
-data class DisplayTrack(val name: String, val points: List<TrackPoint>)
+/**
+ * A named track ready to be drawn on a map. Segments are drawn as separate
+ * lines, so a pause or a gap between two merged recordings shows up as the
+ * break it is rather than a straight line across it.
+ */
+data class DisplayTrack(val name: String, val track: Track) {
+    val points get() = track.points
+}
 
 private const val STYLE_URI = "https://tiles.openfreemap.org/styles/liberty"
 
@@ -191,11 +197,14 @@ fun TrackMap(
             tracks.forEachIndexed { index, track ->
                 key(track.name) {
                     val color = TRACK_COLORS[index % TRACK_COLORS.size]
-                    if (track.points.size >= 2) {
+                    // A one-point segment has no line to draw, and MultiLineString
+                    // rejects it outright.
+                    val drawn = track.track.segments
+                        .filter { it.size >= 2 }
+                        .map { segment -> segment.map { Position(it.lon, it.lat) } }
+                    if (drawn.isNotEmpty()) {
                         val line = rememberGeoJsonSource(
-                            GeoJsonData.Features(
-                                LineString(track.points.map { Position(it.lon, it.lat) })
-                            )
+                            GeoJsonData.Features(MultiLineString(drawn))
                         )
                         LineLayer(
                             id = "track-casing-${track.name}",

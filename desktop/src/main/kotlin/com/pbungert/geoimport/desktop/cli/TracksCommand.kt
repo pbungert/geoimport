@@ -81,20 +81,22 @@ class TracksList : CliktCommand(name = "list") {
 
         val nameWidth = files.maxOf { it.name.length }
         for (file in files) {
-            val points = try {
+            val track = try {
                 file.inputStream().use { TrackParser.parse(it) }
             } catch (e: Exception) {
                 echo("  ${file.name.padEnd(nameWidth)}  unreadable (${e.message ?: e})")
                 continue
             }
-            if (points.isEmpty()) {
+            val range = track.span
+            if (range == null) {
                 echo("  ${file.name.padEnd(nameWidth)}  no timestamped points")
                 continue
             }
-            val span = Duration.between(points.first().time, points.last().time)
+            val segments = track.segments.size.takeIf { it > 1 }?.let { ", $it segments" }.orEmpty()
             echo(
-                "  ${file.name.padEnd(nameWidth)}  ${points.size} points  " +
-                    "${points.first().time} -> ${points.last().time}  (${format(span)})"
+                "  ${file.name.padEnd(nameWidth)}  ${track.size} points  " +
+                    "${range.start} -> ${range.endInclusive}  " +
+                    "(${format(Duration.between(range.start, range.endInclusive))}$segments)"
             )
         }
     }

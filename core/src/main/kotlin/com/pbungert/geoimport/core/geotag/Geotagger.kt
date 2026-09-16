@@ -1,5 +1,6 @@
 package com.pbungert.geoimport.core.geotag
 
+import com.pbungert.geoimport.core.model.Track
 import com.pbungert.geoimport.core.model.TrackPoint
 import java.time.Duration
 import java.time.Instant
@@ -11,19 +12,28 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Matches photo capture times against a track. Positions between two track
- * points are linearly interpolated; outside the track's time range the nearest
- * endpoint is used if it is within [tolerance].
+ * Matches photo capture times against a track.
  *
- * Note that [tolerance] only clamps extrapolation past the ends of the track.
- * Inside the range a photo is always interpolated between its bracketing
- * points, however far apart those are. [Fix.gapMeters] reports how far, so a
- * caller can tell a position that was measured from one that was inferred
- * across a recording dropout.
+ * Inside a segment a photo is interpolated between its bracketing points,
+ * however far apart those are: the device was recording the whole time, so a
+ * gap is a dropout and the two points really do bracket where it went.
+ * [Fix.gapMeters] reports how far, so a caller can tell a position that was
+ * measured from one that was inferred across a dropout.
+ *
+ * Between segments — a paused recorder, or two separate outings merged into
+ * one track — nothing was recorded, and a straight line from where one segment
+ * ended to where the next began is not a route anybody took. There a photo is
+ * placed only if it falls within [tolerance] of a segment's end, which is the
+ * same rule that has always applied past the ends of the track as a whole.
  */
-class Geotagger(track: List<TrackPoint>, private val tolerance: Duration) {
+class Geotagger(track: Track, private val tolerance: Duration) {
 
-    private val points = track.sortedBy { it.time }
+    /** Convenience for a single continuous recording, chiefly for tests. */
+    constructor(points: List<TrackPoint>, tolerance: Duration) : this(Track.of(points), tolerance)
+
+    private val segments = track.segments
+        .filter { it.isNotEmpty() }
+        .map { it.sortedBy { point -> point.time } }
 
     /**
      * [gapMeters] is the distance between the two points the fix was
@@ -35,21 +45,48 @@ class Geotagger(track: List<TrackPoint>, private val tolerance: Duration) {
     fun locate(time: Instant): TrackPoint? = resolve(time)?.point
 
     fun resolve(time: Instant): Fix? {
-        if (points.isEmpty()) return null
-        val idx = points.indexOfFirst { !it.time.isBefore(time) }
-        return when (idx) {
-            -1 -> points.last()
-                .takeIf { Duration.between(it.time, time) <= tolerance }
-                ?.let { Fix(it, null) }
-            0 -> points.first()
-                .takeIf { Duration.between(time, points.first().time) <= tolerance }
-                ?.let { Fix(it, null) }
-            else -> {
-                val a = points[idx - 1]
-                val b = points[idx]
-                Fix(interpolate(a, b, time), distanceMeters(a, b))
+        var best: Fix? = null
+        var bestSpan: Duration? = null
+        var nearestEnd: TrackPoint? = null
+        var nearestDistance: Duration? = null
+
+        for (points in segments) {
+            val idx = points.firstAtOrAfter(time)
+            if (idx == 0 || idx == points.size) {
+                // Before or after this segment: a candidate only via tolerance.
+                val end = if (idx == 0) points.first() else points.last()
+                val away = Duration.between(time, end.time)
+                    .let { if (it.isNegative) it.negated() else it }
+                if (away <= tolerance && (nearestDistance == null || away < nearestDistance)) {
+                    nearestEnd = end
+                    nearestDistance = away
+                }
+                continue
+            }
+            // Inside this segment. Two overlapping recordings can both bracket
+            // the same moment; the one that sampled it more closely is the
+            // better evidence, so the shortest bracket wins.
+            val a = points[idx - 1]
+            val b = points[idx]
+            val span = Duration.between(a.time, b.time)
+            if (bestSpan == null || span < bestSpan) {
+                bestSpan = span
+                best = Fix(interpolate(a, b, time), distanceMeters(a, b))
             }
         }
+
+        return best ?: nearestEnd?.let { Fix(it, null) }
+    }
+
+    /** Index of the first point at or after [time], or `size` when there is none. */
+    private fun List<TrackPoint>.firstAtOrAfter(time: Instant): Int {
+        var low = 0
+        var high = size
+        while (low < high) {
+            val mid = (low + high) ushr 1
+            if (this[mid].time.isBefore(time)) low = mid + 1 else high = mid
+        }
+        return low
     }
 
     private fun distanceMeters(a: TrackPoint, b: TrackPoint): Double {

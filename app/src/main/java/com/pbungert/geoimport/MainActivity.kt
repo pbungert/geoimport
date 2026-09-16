@@ -468,7 +468,7 @@ private fun LiveTrackMap(recording: RecordingState?, modifier: Modifier = Modifi
                 val file = File(TrackRecorderService.tracksDir(), rec.fileName)
                 try {
                     file.inputStream().use { TrackParser.parse(it) }
-                        .takeIf { it.isNotEmpty() }
+                        .takeIf { !it.isEmpty }
                         ?.let { DisplayTrack(file.nameWithoutExtension, it) }
                 } catch (_: Exception) {
                     null
@@ -543,7 +543,7 @@ private fun loadRecordedTracks(): List<DisplayTrack> =
         ?.mapNotNull { file ->
             try {
                 file.inputStream().use { TrackParser.parse(it) }
-                    .takeIf { it.isNotEmpty() }
+                    .takeIf { !it.isEmpty }
                     ?.let { DisplayTrack(file.nameWithoutExtension, it) }
             } catch (_: Exception) {
                 null
@@ -599,11 +599,11 @@ private fun ImportTab(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            val trackPoints = viewModel.trackPoints
-            if (viewModel.trackUri != null && !trackPoints.isNullOrEmpty()) {
+            val track = viewModel.trackPoints
+            if (viewModel.trackUri != null && track != null && !track.isEmpty) {
                 var mapFullscreen by rememberSaveable { mutableStateOf(false) }
                 val displayTracks = listOf(
-                    DisplayTrack(viewModel.trackName ?: "Selected track", trackPoints)
+                    DisplayTrack(viewModel.trackName ?: "Selected track", track)
                 )
                 TrackMap(
                     displayTracks,

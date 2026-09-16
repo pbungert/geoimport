@@ -21,7 +21,7 @@ class TrackParserTest {
     val tmp = TemporaryFolder()
 
     private fun parse(xml: String, zone: ZoneId = ZoneId.of("UTC")) =
-        TrackParser.parse(xml.trimIndent().byteInputStream(), zone)
+        TrackParser.parse(xml.trimIndent().byteInputStream(), zone).points
 
     @Test
     fun roundTripsAccuracyThroughTheWriter() {
@@ -31,7 +31,7 @@ class TrackParserTest {
         writer.addPoint(TrackPoint(Instant.parse("2026-09-12T14:19:44Z"), 46.46, 9.93, 1918.9, 12.5))
         writer.close()
 
-        val read = TrackParser.parse(file.inputStream(), ZoneId.of("UTC")).single()
+        val read = TrackParser.parse(file.inputStream(), ZoneId.of("UTC")).points.single()
         assertEquals(12.5, read.accuracy!!, 0.05)
         assertEquals(46.46, read.lat, 1e-6)
         assertEquals(1918.9, read.ele!!, 0.05)
@@ -128,6 +128,61 @@ class TrackParserTest {
             """
         )
         assertEquals(listOf(1.0, 9.0), points.map { it.lat })
+    }
+
+    @Test
+    fun keepsTrksegBoundariesAsSeparateSegments() {
+        val track = TrackParser.parse(
+            """
+            <gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+             <trk>
+              <trkseg>
+               <trkpt lat="1.0" lon="1.0"><time>2026-01-01T00:00:00Z</time></trkpt>
+               <trkpt lat="2.0" lon="2.0"><time>2026-01-01T00:01:00Z</time></trkpt>
+              </trkseg>
+              <trkseg><trkpt lat="9.0" lon="9.0"><time>2026-01-01T05:00:00Z</time></trkpt></trkseg>
+             </trk>
+            </gpx>
+            """.trimIndent().byteInputStream(),
+            ZoneId.of("UTC"),
+        )
+        assertEquals(listOf(2, 1), track.segments.map { it.size })
+    }
+
+    @Test
+    fun looseWaypointsDoNotRunIntoTheFollowingSegment() {
+        val track = TrackParser.parse(
+            """
+            <gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+             <wpt lat="1.0" lon="2.0"><time>2026-01-01T00:00:00Z</time></wpt>
+             <trk><trkseg>
+              <trkpt lat="3.0" lon="4.0"><time>2026-01-01T00:01:00Z</time></trkpt>
+             </trkseg></trk>
+            </gpx>
+            """.trimIndent().byteInputStream(),
+            ZoneId.of("UTC"),
+        )
+        assertEquals(2, track.segments.size)
+    }
+
+    @Test
+    fun eachKmlGxTrackIsItsOwnSegment() {
+        val track = TrackParser.parse(
+            """
+            <kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">
+             <Document>
+              <Placemark><gx:Track>
+               <when>2026-07-17T09:00:00Z</when><gx:coord>11.0 48.0</gx:coord>
+              </gx:Track></Placemark>
+              <Placemark><gx:Track>
+               <when>2026-07-17T18:00:00Z</when><gx:coord>12.0 49.0</gx:coord>
+              </gx:Track></Placemark>
+             </Document>
+            </kml>
+            """.trimIndent().byteInputStream(),
+            ZoneId.of("UTC"),
+        )
+        assertEquals(listOf(1, 1), track.segments.map { it.size })
     }
 
     @Test
@@ -237,7 +292,7 @@ class TrackParserTest {
         writer.addPoint(TrackPoint(Instant.parse("2026-07-17T09:02:00Z"), -33.8688, 151.2093, -5.0))
         writer.close()
 
-        val read = TrackParser.parse(file.inputStream(), ZoneId.of("UTC"))
+        val read = TrackParser.parse(file.inputStream(), ZoneId.of("UTC")).points
         assertEquals(3, read.size)
         assertEquals(written[0], read[0])
         assertEquals(written[1].lat, read[1].lat, 1e-7)
