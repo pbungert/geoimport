@@ -28,6 +28,18 @@ data class ImportPlan(
     val willGeotag get() = selected.count { it.fix != null }
 
     val withoutFix get() = selected.count { it.fix == null }
+
+    /**
+     * Selected files whose position was interpolated across a wide dropout.
+     * Reported rather than acted on: a long gap where the track did not move
+     * (a night in one place) is harmless, while a short one covering kilometres
+     * is not, so only the distance is worth flagging - and only to the user.
+     */
+    val acrossWideGap get() = selected.count { (it.gapMeters ?: 0.0) >= WIDE_GAP_METERS }
+
+    companion object {
+        const val WIDE_GAP_METERS = 500.0
+    }
 }
 
 /**
@@ -36,7 +48,7 @@ data class ImportPlan(
  * [fix] is null when no track was supplied, or when the capture time fell
  * outside the track beyond the tolerance. [writer] names the writer that would
  * handle it, so a dry run shows whether a file gets embedded tags or a sidecar
- * before anything is written.
+ * before anything is written. [gapMeters] bounds how far off [fix] can be.
  */
 data class PlannedFile(
     val source: File,
@@ -44,6 +56,8 @@ data class PlannedFile(
     val captureTime: Instant,
     val fix: TrackPoint? = null,
     val writer: String? = null,
+    /** Distance between the bracketing track points; see [Geotagger.Fix]. */
+    val gapMeters: Double? = null,
     /** Cleared when the user deselects a row in the preview. */
     val selected: Boolean = true,
 )

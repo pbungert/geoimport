@@ -468,12 +468,14 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         // Tagging happens in place, so source and destination are the same file.
         val entries = files.map { file ->
             val time = captureTime.instantOf(file)
-            val fix = geotagger.locate(time)
+            val resolved = geotagger.resolve(time)
+            val fix = resolved?.point
             PlannedFile(
                 source = file,
                 destination = file,
                 captureTime = time,
                 fix = fix,
+                gapMeters = resolved?.gapMeters,
                 writer = if (fix == null) null else gpsWriter.effectiveWriterFor(file)?.name,
             )
         }

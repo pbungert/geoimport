@@ -11,4 +11,6 @@ data class TrackPoint(
     val lat: Double,
     val lon: Double,
     val ele: Double?,
+    /** Horizontal accuracy in metres, when the source recorded one. */
+    val accuracy: Double? = null,
 )

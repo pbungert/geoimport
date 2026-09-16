@@ -24,6 +24,35 @@ class TrackParserTest {
         TrackParser.parse(xml.trimIndent().byteInputStream(), zone)
 
     @Test
+    fun roundTripsAccuracyThroughTheWriter() {
+        val file = tmp.newFile("acc.gpx")
+        file.delete()
+        val writer = GpxWriter(file, "acc")
+        writer.addPoint(TrackPoint(Instant.parse("2026-09-12T14:19:44Z"), 46.46, 9.93, 1918.9, 12.5))
+        writer.close()
+
+        val read = TrackParser.parse(file.inputStream(), ZoneId.of("UTC")).single()
+        assertEquals(12.5, read.accuracy!!, 0.05)
+        assertEquals(46.46, read.lat, 1e-6)
+        assertEquals(1918.9, read.ele!!, 0.05)
+    }
+
+    @Test
+    fun leavesAccuracyNullWhenTheFileHasNone() {
+        val points = parse(
+            """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+             <trk><trkseg>
+              <trkpt lat="1.0" lon="2.0"><time>2026-01-01T00:00:00Z</time></trkpt>
+             </trkseg></trk>
+            </gpx>
+            """
+        )
+        assertEquals(null, points.single().accuracy)
+    }
+
+    @Test
     fun readsTrkptWithElevationAndTime() {
         val points = parse(
             """

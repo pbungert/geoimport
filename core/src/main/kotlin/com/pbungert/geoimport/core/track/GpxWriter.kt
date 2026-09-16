@@ -40,6 +40,17 @@ class GpxWriter(val file: File, trackName: String) {
         )
         point.ele?.let { sb.append(String.format(Locale.US, "    <ele>%.1f</ele>\n", it)) }
         sb.append("    <time>").append(point.time).append("</time>\n")
+        // Metres, so not GPX's dimensionless <hdop>. Kept in an
+        // extension rather than fudged into the standard element; readers that
+        // do not know the namespace skip <extensions>.
+        point.accuracy?.let {
+            sb.append(
+                String.format(
+                    Locale.US,
+                    "    <extensions><geoimport:acc>%.1f</geoimport:acc></extensions>\n", it,
+                )
+            )
+        }
         sb.append("   </trkpt>\n")
         val bytes = sb.toString().toByteArray(StandardCharsets.UTF_8)
         raf.seek(footerOffset)
@@ -68,13 +79,18 @@ class GpxWriter(val file: File, trackName: String) {
     private fun escapeXml(s: String) =
         s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    private companion object {
-        const val HEADER = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
-            "<gpx version=\"1.1\" creator=\"Geoimport\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n" +
+    companion object {
+        /** Namespace for the accuracy extension; read back by TrackParser. */
+        const val NS = "https://pbungert.github.io/geoimport/gpx/1"
+
+        private const val HEADER = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+            "<gpx version=\"1.1\" creator=\"Geoimport\"" +
+            " xmlns=\"http://www.topografix.com/GPX/1/1\"" +
+            " xmlns:geoimport=\"$NS\">\n" +
             " <trk>\n" +
             "  <name>%s</name>\n" +
             "  <trkseg>\n"
-        val FOOTER = "  </trkseg>\n </trk>\n</gpx>\n".toByteArray(StandardCharsets.UTF_8)
-        val SEGMENT_BREAK = "  </trkseg>\n  <trkseg>\n".toByteArray(StandardCharsets.UTF_8)
+        private val FOOTER = "  </trkseg>\n </trk>\n</gpx>\n".toByteArray(StandardCharsets.UTF_8)
+        private val SEGMENT_BREAK = "  </trkseg>\n  <trkseg>\n".toByteArray(StandardCharsets.UTF_8)
     }
 }

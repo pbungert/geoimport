@@ -123,6 +123,12 @@ class ImportCommand : CliktCommand(name = "import") {
         echo("")
         if (hasTrack) {
             echo("${plan.willGeotag} would be geotagged, ${plan.withoutFix} would not.")
+            if (plan.acrossWideGap > 0) {
+                echo(
+                    "${plan.acrossWideGap} of those sit in a track gap wider than " +
+                        "${ImportPlan.WIDE_GAP_METERS.toInt()} m, so the position is inferred."
+                )
+            }
         }
         echo("Nothing was written (--dry-run).")
     }

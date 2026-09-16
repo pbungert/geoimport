@@ -707,7 +707,10 @@ private fun PlanPreview(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
             Text(
-                "${plan.willGeotag} of ${plan.selected.size} would be geotagged",
+                buildString {
+                    append("${plan.willGeotag} of ${plan.selected.size} would be geotagged")
+                    if (plan.acrossWideGap > 0) append(", ${plan.acrossWideGap} across a track gap")
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp),

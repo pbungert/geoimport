@@ -62,6 +62,7 @@ object TrackParser {
         private var lon = 0.0
         private var ele: Double? = null
         private var time: Instant? = null
+        private var accuracy: Double? = null
 
         // KML state
         private val whens = mutableListOf<Instant?>()
@@ -98,6 +99,7 @@ object TrackParser {
                             lon = pLon
                             ele = null
                             time = null
+                            accuracy = null
                         }
                     }
                 }
@@ -122,8 +124,11 @@ object TrackParser {
                 when (localName) {
                     "ele" -> if (inPoint) ele = body.trim().toDoubleOrNull()
                     "time" -> if (inPoint) time = parseTime(body)
+                    "acc" -> if (inPoint && uri == GpxWriter.NS) {
+                        accuracy = body.trim().toDoubleOrNull()
+                    }
                     "trkpt", "rtept", "wpt" -> if (inPoint) {
-                        time?.let { points.add(TrackPoint(it, lat, lon, ele)) }
+                        time?.let { points.add(TrackPoint(it, lat, lon, ele, accuracy)) }
                         inPoint = false
                     }
                 }

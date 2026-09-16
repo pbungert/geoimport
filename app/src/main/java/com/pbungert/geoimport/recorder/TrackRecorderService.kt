@@ -379,12 +379,13 @@ class TrackRecorderService : Service() {
 
 /**
  * Android fix to the portable track model. Altitude is the raw WGS-84
- * ellipsoidal height; accuracy, speed and bearing are used for filtering only
- * and are deliberately not persisted.
+ * ellipsoidal height. Accuracy is persisted so a later track can be judged
+ * from the file alone; speed and bearing are used for filtering only.
  */
 private fun Location.toTrackPoint() = TrackPoint(
     time = Instant.ofEpochMilli(time),
     lat = latitude,
     lon = longitude,
     ele = if (hasAltitude()) altitude else null,
+    accuracy = if (hasAccuracy()) accuracy.toDouble() else null,
 )

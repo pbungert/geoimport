@@ -56,12 +56,14 @@ class PhotoImporter(
 
         val entries = filesToCopy.map { file ->
             val time = captureTime.instantOf(file)
-            val fix = geotagger?.locate(time)
+            val resolved = geotagger?.resolve(time)
+            val fix = resolved?.point
             PlannedFile(
                 source = file,
                 destination = File(destFolder, file.name),
                 captureTime = time,
                 fix = fix,
+                gapMeters = resolved?.gapMeters,
                 writer = if (fix == null) null else writer?.effectiveWriterFor(file)?.name,
             )
         }
