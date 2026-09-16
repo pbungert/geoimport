@@ -67,7 +67,7 @@ class ImportCommand : CliktCommand(name = "import") {
         )
 
         val (startFilename, startTimestamp) = parseResume(resume)
-        val plan = importer.plan(startFilename, startTimestamp, geotagger, writer)
+        val plan = importer.plan(startFilename, startTimestamp, writer) { geotagger }
 
         if (plan.isEmpty) {
             echo("Nothing to import.")

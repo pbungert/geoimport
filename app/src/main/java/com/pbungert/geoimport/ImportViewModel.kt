@@ -304,7 +304,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val captureTime = CaptureTimeResolver(AndroidExifDateReader, assumedZone, cameraClockOffset)
         val geotagger = track?.let { Geotagger(it, tolerance) }
         val importer = PhotoImporter(source, destBase, captureTime, ::log)
-        val plan = importer.plan(startFn, startTs, geotagger, gpsWriter)
+        val plan = importer.plan(startFn, startTs, gpsWriter) { geotagger }
 
         if (plan.isEmpty) {
             log("Nothing to import.")

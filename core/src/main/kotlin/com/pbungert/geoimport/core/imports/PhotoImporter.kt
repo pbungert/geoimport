@@ -4,6 +4,7 @@ import com.pbungert.geoimport.core.geotag.Geotagger
 import com.pbungert.geoimport.core.geotag.GpsWriter
 import java.io.File
 import java.io.IOException
+import java.time.Instant
 import java.time.LocalDateTime
 import kotlin.math.pow
 
@@ -34,15 +35,20 @@ class PhotoImporter(
     /**
      * Works out what would be copied, and where, without creating anything.
      *
-     * Pass [geotagger] and [writer] to resolve each file's position and the
+     * Pass [geotaggerFor] and [writer] to resolve each file's position and the
      * writer that would handle it, so a preview can show the outcome before
      * committing to it.
+     *
+     * [geotaggerFor] is handed the capture times of the files that survived the
+     * resume filter, and only then decides what to match them against — which
+     * is what lets a caller pick the tracks that actually cover this import out
+     * of a folder full of them. Nothing before that point depends on the track.
      */
     fun plan(
         startFilename: String?,
         startTimestamp: LocalDateTime?,
-        geotagger: Geotagger? = null,
         writer: GpsWriter? = null,
+        geotaggerFor: (captureTimes: List<Instant>) -> Geotagger? = { null },
     ): ImportPlan {
         val destFolder = File(destBasePath, importFolderName(findHighestImportNumber() + 1))
         val sourceFiles = collectSourceFiles(sourcePath)
@@ -54,8 +60,12 @@ class PhotoImporter(
         val filesToCopy = filterNewFiles(sourceFiles, resolvedFilename, resolvedTimestamp)
         log("After filtering, ${filesToCopy.size} files will be copied.")
 
-        val entries = filesToCopy.map { file ->
-            val time = captureTime.instantOf(file)
+        // Resolved once and carried through: reading EXIF off a card is the
+        // slow part, and both the track filter and the entries need it.
+        val timed = filesToCopy.map { it to captureTime.instantOf(it) }
+        val geotagger = geotaggerFor(timed.map { it.second })
+
+        val entries = timed.map { (file, time) ->
             val resolved = geotagger?.resolve(time)
             val fix = resolved?.point
             PlannedFile(
