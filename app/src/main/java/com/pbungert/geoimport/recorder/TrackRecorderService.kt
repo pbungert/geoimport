@@ -17,6 +17,7 @@ import android.media.MediaScannerConnection
 import android.os.Environment
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import com.pbungert.geoimport.MainActivity
 import com.pbungert.geoimport.core.model.TrackPoint
 import com.pbungert.geoimport.core.track.GpxWriter
@@ -31,6 +32,7 @@ data class RecordingState(
     val startedAtMillis: Long,
     val pointCount: Int,
     val paused: Boolean = false,
+    val droppedCount: Int = 0,
 )
 
 /**
@@ -39,12 +41,20 @@ data class RecordingState(
  * with the screen off; after a process kill it restarts and resumes the same
  * file using the settings persisted in SharedPreferences.
  */
-class TrackRecorderService : Service(), LocationListener {
+class TrackRecorderService : Service() {
 
     private var writer: GpxWriter? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var requestingUpdates = false
     private var intervalMillis = DEFAULT_INTERVAL_MILLIS
+
+    private var lastGpsFixRealtime = 0L
+    private var firstFixPending = true
+
+    // One listener per provider: LocationManager keys registrations by listener,
+    // so sharing one would replace the first request instead of adding to it.
+    private val gpsListener = LocationListener { onFix(it, fromGps = true) }
+    private val fusedListener = LocationListener { onFix(it, fromGps = false) }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -152,25 +162,34 @@ class TrackRecorderService : Service(), LocationListener {
     private fun requestLocationUpdates() {
         if (requestingUpdates) return
         val manager = getSystemService(LocationManager::class.java)
-        // Fused mixes GPS with wifi- and cell-based positioning, so the track
-        // keeps going indoors where raw GPS drops out. Its coarse cell-only
-        // fixes are thrown away again by the accuracy filter in isUsable().
-        val provider = if (manager.isProviderEnabled(LocationManager.FUSED_PROVIDER)) {
-            LocationManager.FUSED_PROVIDER
-        } else {
-            LocationManager.GPS_PROVIDER
-        }
         val request = LocationRequest.Builder(intervalMillis)
             .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
             .setMinUpdateIntervalMillis(intervalMillis)
             .build()
-        manager.requestLocationUpdates(provider, request, mainExecutor, this)
+
+        // GNSS leads: it is the only source that keeps delivering away from wifi
+        // and cell coverage. Fused led here once and dropped ~4 fixes in 5 in
+        // the mountains, answering the interval from network positioning alone.
+        manager.requestLocationUpdates(
+            LocationManager.GPS_PROVIDER, request, mainExecutor, gpsListener,
+        )
+
+        if (manager.isProviderEnabled(LocationManager.FUSED_PROVIDER)) {
+            manager.requestLocationUpdates(
+                LocationManager.FUSED_PROVIDER, request, mainExecutor, fusedListener,
+            )
+        }
+
+        firstFixPending = true
         requestingUpdates = true
     }
 
     private fun stopLocationUpdates() {
         if (!requestingUpdates) return
-        getSystemService(LocationManager::class.java).removeUpdates(this)
+        val manager = getSystemService(LocationManager::class.java)
+        manager.removeUpdates(gpsListener)
+        manager.removeUpdates(fusedListener)
+        lastGpsFixRealtime = 0L
         requestingUpdates = false
     }
 
@@ -187,27 +206,44 @@ class TrackRecorderService : Service(), LocationListener {
     }
 
     /**
-     * Fused fixes range from a few metres (GPS, or wifi in a well-mapped area)
-     * to several kilometres (cell tower only). Only the accurate ones are worth
-     * writing: a cell fix drags the track across town and back for one point.
-     *
-     * Stale fixes are dropped too. Fused likes to answer the first request with
-     * its last known position, and that point's old timestamp would go on to
-     * mis-geotag whichever photo happened to match it.
+     * GNSS degrades under a cliff but never invents a position kilometres away,
+     * so it gets the loose bar; fused can hand back a cell-tower estimate, so it
+     * gets the strict one. The age check guards against a provider answering a
+     * fresh request with its last known position, which would mis-geotag photos;
+     * applied to every fix it would instead discard good coalesced deliveries.
      */
-    private fun isUsable(location: Location): Boolean =
-        location.hasAccuracy() &&
-            location.accuracy <= MAX_ACCURACY_METERS &&
-            location.elapsedRealtimeAgeMillis <= maxOf(intervalMillis, MIN_MAX_AGE_MILLIS)
+    private fun isUsable(location: Location, fromGps: Boolean): Boolean {
+        val maxAccuracy = if (fromGps) MAX_GPS_ACCURACY_METERS else MAX_FUSED_ACCURACY_METERS
+        if (!location.hasAccuracy() || location.accuracy > maxAccuracy) return false
+        if (firstFixPending &&
+            location.elapsedRealtimeAgeMillis > maxOf(intervalMillis, MIN_MAX_AGE_MILLIS)
+        ) return false
+        return true
+    }
 
-    override fun onLocationChanged(location: Location) {
+    /** Fused is redundant while GNSS keeps up: writing both jitters the track. */
+    private fun supersededByGps(fromGps: Boolean): Boolean {
+        if (fromGps) return false
+        val grace = maxOf(intervalMillis + intervalMillis / 2, MIN_FUSED_FALLBACK_MILLIS)
+        return SystemClock.elapsedRealtime() - lastGpsFixRealtime < grace
+    }
+
+    private fun onFix(location: Location, fromGps: Boolean) {
         val w = writer ?: return
-        if (!isUsable(location)) return
+        if (supersededByGps(fromGps)) return
+        if (!isUsable(location, fromGps)) {
+            val s = state.value ?: return
+            state.value = s.copy(droppedCount = s.droppedCount + 1)
+            updateNotification()
+            return
+        }
         try {
             w.addPoint(location.toTrackPoint())
         } catch (_: Exception) {
             return
         }
+        if (fromGps) lastGpsFixRealtime = SystemClock.elapsedRealtime()
+        firstFixPending = false
         val s = state.value ?: return
         state.value = s.copy(pointCount = s.pointCount + 1)
         updateNotification()
@@ -217,7 +253,7 @@ class TrackRecorderService : Service(), LocationListener {
         val s = state.value ?: return
         getSystemService(NotificationManager::class.java).notify(
             NOTIFICATION_ID,
-            buildNotification(s.fileName.removeSuffix(".gpx"), s.pointCount, s.paused),
+            buildNotification(s.fileName.removeSuffix(".gpx"), s.pointCount, s.paused, s.droppedCount),
         )
     }
 
@@ -244,7 +280,12 @@ class TrackRecorderService : Service(), LocationListener {
         super.onDestroy()
     }
 
-    private fun buildNotification(name: String, points: Int, paused: Boolean): Notification {
+    private fun buildNotification(
+        name: String,
+        points: Int,
+        paused: Boolean,
+        dropped: Int = 0,
+    ): Notification {
         val stopIntent = PendingIntent.getService(
             this, 1,
             Intent(this, TrackRecorderService::class.java).setAction(ACTION_STOP),
@@ -264,7 +305,11 @@ class TrackRecorderService : Service(), LocationListener {
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentTitle(if (paused) "GPS track paused" else "Recording GPS track")
-            .setContentText("$name.gpx — $points points")
+            .setContentText(
+                // Readable in the field, where logcat is not.
+                if (dropped > 0) "$name.gpx — $points points, $dropped dropped"
+                else "$name.gpx — $points points"
+            )
             .setOngoing(true)
             .setContentIntent(contentIntent)
             .addAction(
@@ -294,13 +339,16 @@ class TrackRecorderService : Service(), LocationListener {
         const val DEFAULT_INTERVAL_MINUTES = 1.0
         const val DEFAULT_INTERVAL_MILLIS = (DEFAULT_INTERVAL_MINUTES * 60_000).toLong()
 
-        /**
-         * Accuracy cut-off for a recorded point. Comfortably above a wifi fix
-         * (~15-40 m) and far below a cell-tower one (500 m and up).
-         */
-        private const val MAX_ACCURACY_METERS = 50f
+        /** Above a wifi fix (~15-40 m), far below a cell-tower one (500 m up). */
+        private const val MAX_FUSED_ACCURACY_METERS = 50f
 
-        /** Age cut-off, when the recording interval is shorter than this. */
+        /** Loose: a real fix in a steep valley reaches this without being wrong. */
+        private const val MAX_GPS_ACCURACY_METERS = 100f
+
+        /** Floor on how long GNSS must be silent before a fused fix is written. */
+        private const val MIN_FUSED_FALLBACK_MILLIS = 90_000L
+
+        /** Age cut-off for the first fix, when the interval is shorter. */
         private const val MIN_MAX_AGE_MILLIS = 60_000L
 
         private const val CHANNEL_ID = "track_recording"

@@ -236,7 +236,10 @@ private fun RecordingBanner(recording: RecordingState) {
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
                 Text(
-                    "${recording.fileName} · ${recording.pointCount} points",
+                    buildString {
+                        append("${recording.fileName} · ${recording.pointCount} points")
+                        if (recording.droppedCount > 0) append(" · ${recording.droppedCount} dropped")
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     maxLines = 1,
