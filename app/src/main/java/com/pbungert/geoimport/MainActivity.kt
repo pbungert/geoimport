@@ -140,7 +140,13 @@ fun ImportScreen(viewModel: ImportViewModel = viewModel()) {
     }
 
     val recording by TrackRecorderService.state.collectAsState()
-    var selectedTab by rememberSaveable { mutableStateOf(MainTab.Import) }
+    // A run in progress, paused included, is what the user came back for. The live
+    // state is the only honest signal: the prefs flag outlives a killed recording.
+    var selectedTab by rememberSaveable {
+        mutableStateOf(
+            if (TrackRecorderService.state.value != null) MainTab.Record else MainTab.Import
+        )
+    }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val showMessage: (String) -> Unit = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
