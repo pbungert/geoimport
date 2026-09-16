@@ -25,13 +25,17 @@ import com.pbungert.geoimport.core.imports.ImportPlan
 import com.pbungert.geoimport.core.imports.PlannedFile
 import com.pbungert.geoimport.core.imports.PhotoImporter
 import com.pbungert.geoimport.core.model.Track
+import com.pbungert.geoimport.core.track.NamedTrack
 import com.pbungert.geoimport.core.track.TrackParser
+import com.pbungert.geoimport.core.track.TrackSelection
+import com.pbungert.geoimport.recorder.TrackRecorderService
 import com.pbungert.geoimport.platform.AndroidExifDateReader
 import com.pbungert.geoimport.platform.AndroidJpegGpsWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.Duration
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -92,6 +96,15 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private inner class SavedFlag(private val key: String, default: Boolean) {
+        private val state = mutableStateOf(prefs.getBoolean(key, default))
+        operator fun getValue(thisRef: Any?, property: KProperty<*>) = state.value
+        operator fun setValue(thisRef: Any?, property: KProperty<*>, value: Boolean) {
+            state.value = value
+            prefs.edit().putBoolean(key, value).apply()
+        }
+    }
+
     // Per-run, deliberately not persisted: a stale resume point is dangerous.
     var startFilename by mutableStateOf("")
     var startTimestamp by mutableStateOf("")
@@ -125,14 +138,45 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             ((clockOffsetMinutes.trim().toDoubleOrNull() ?: 0.0) * 60_000).roundToLong()
         )
 
-    var trackUri by mutableStateOf<Uri?>(null)
-        private set
-    var trackName by mutableStateOf<String?>(null)
+    /** One track file on offer, already parsed. */
+    data class LoadedTrack(
+        /** Stable identity: the picked URI, or the path of a recorded file. */
+        val key: String,
+        val name: String,
+        val track: Track,
+        /** Recorded by this app, so it came from the folder rather than a pick. */
+        val fromRecorder: Boolean,
+    )
+
+    /**
+     * Every track currently on offer, recorded and picked. Which of them an
+     * import actually uses is decided per run from the photos' capture times,
+     * because a folder of recordings is mostly days this import knows nothing
+     * about - see [TrackSelection].
+     */
+    var tracks by mutableStateOf<List<LoadedTrack>>(emptyList())
         private set
 
-    /** The selected track, for the map preview; null while unparsed. */
-    var trackPoints by mutableStateOf<Track?>(null)
+    var tracksLoading by mutableStateOf(false)
         private set
+
+    /**
+     * Names of the tracks the last plan matched against. Null before a plan
+     * exists, which is the point at which capture times are known.
+     */
+    var activeTrackNames by mutableStateOf<Set<String>?>(null)
+        private set
+
+    /**
+     * Whether the app's own recording folder counts as selected. On by default:
+     * the tracks it holds were recorded for exactly this, and the time filter
+     * keeps the irrelevant ones out without anybody having to say so.
+     */
+    private var recordedTracksEnabled by SavedFlag(KEY_USE_RECORDED, true)
+    val useRecordedTracks get() = recordedTracksEnabled
+
+    /** Tracks picked through the document picker, in the order they were added. */
+    private var pickedUris: List<Uri> = emptyList()
 
     var running by mutableStateOf(false)
         private set
@@ -141,54 +185,146 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     val logLines = mutableStateListOf<String>()
 
     init {
-        // The track picker used to have to be driven again on every launch;
-        // a persisted URI permission makes the last choice stick.
-        prefs.getString(KEY_TRACK_URI, null)
-            ?.let { runCatching { Uri.parse(it) }.getOrNull() }
-            ?.let { restoreTrack(it) }
+        pickedUris = readPickedUris()
+        refreshTracks()
     }
 
-    fun selectTrack(uri: Uri) {
+    fun setUseRecordedTracks(enabled: Boolean) {
+        if (recordedTracksEnabled == enabled) return
+        recordedTracksEnabled = enabled
+        refreshTracks()
+    }
+
+    fun addTracks(uris: List<Uri>) {
+        val resolver = getApplication<Application>().contentResolver
+        val added = uris.filter { uri ->
+            runCatching {
+                resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            uri !in pickedUris
+        }
+        if (added.isEmpty()) return
+        pickedUris = pickedUris + added
+        writePickedUris()
+        refreshTracks()
+    }
+
+    /** Drops a picked track. Recorded ones are governed by [useRecordedTracks]. */
+    fun removeTrack(key: String) {
+        val uri = pickedUris.firstOrNull { it.toString() == key } ?: return
         runCatching {
             getApplication<Application>().contentResolver
-                .takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        prefs.edit().putString(KEY_TRACK_URI, uri.toString()).apply()
-        loadTrack(uri)
+        pickedUris = pickedUris - uri
+        writePickedUris()
+        refreshTracks()
     }
+
+    fun clearPickedTracks() {
+        if (pickedUris.isEmpty()) return
+        val resolver = getApplication<Application>().contentResolver
+        pickedUris.forEach { uri ->
+            runCatching {
+                resolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
+        pickedUris = emptyList()
+        writePickedUris()
+        refreshTracks()
+    }
+
+    val hasPickedTracks get() = pickedUris.isNotEmpty()
 
     /**
-     * Re-reads a track whose permission was granted in an earlier session.
-     * The grant can be gone (revoked, or the file deleted), so a failure here
-     * just clears the selection rather than surfacing an error.
+     * Re-reads everything on offer. A picked file whose grant is gone - revoked,
+     * or the file deleted - drops out quietly rather than taking the rest of the
+     * selection down with it, which is what the single-track version did.
      */
-    private fun restoreTrack(uri: Uri) {
-        loadTrack(uri, onFailure = { clearTrack() })
-    }
-
-    private fun loadTrack(uri: Uri, onFailure: (() -> Unit)? = null) {
-        trackUri = uri
-        trackName = queryDisplayName(uri) ?: uri.lastPathSegment
-        trackPoints = null
+    fun refreshTracks() {
+        val app = getApplication<Application>()
+        val picked = pickedUris
+        val includeRecorded = recordedTracksEnabled
+        tracksLoading = true
+        // The last plan chose from a different set, so its verdict is stale.
+        activeTrackNames = null
         viewModelScope.launch(Dispatchers.IO) {
-            val points = try {
-                getApplication<Application>().contentResolver
-                    .openInputStream(uri)!!.use { TrackParser.parse(it) }
-            } catch (_: Exception) {
-                Track.EMPTY
+            val loaded = buildList {
+                if (includeRecorded) {
+                    TrackRecorderService.tracksDir()
+                        .listFiles { f -> f.isFile && f.extension.lowercase() in TRACK_EXTENSIONS }
+                        ?.sortedBy { it.name }
+                        ?.forEach { file ->
+                            val track = runCatching {
+                                file.inputStream().use { TrackParser.parse(it) }
+                            }.getOrNull()
+                            if (track != null && !track.isEmpty) {
+                                add(LoadedTrack(file.path, file.nameWithoutExtension, track, true))
+                            }
+                        }
+                }
+                for (uri in picked) {
+                    val track = runCatching {
+                        app.contentResolver.openInputStream(uri)!!.use { TrackParser.parse(it) }
+                    }.getOrNull()
+                    if (track != null && !track.isEmpty) {
+                        val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: uri.toString()
+                        add(LoadedTrack(uri.toString(), name.substringBeforeLast('.'), track, false))
+                    }
+                }
             }
+            // Picking a file that is already in the recording folder would
+            // otherwise hand the geotagger the same recording twice.
+            val distinct = loaded.distinctBy { it.name }
             launch(Dispatchers.Main.immediate) {
-                if (trackUri != uri) return@launch
-                if (points.isEmpty && onFailure != null) onFailure() else trackPoints = points
+                tracks = distinct
+                tracksLoading = false
             }
         }
     }
 
-    fun clearTrack() {
-        trackUri = null
-        trackName = null
-        trackPoints = null
-        prefs.edit().remove(KEY_TRACK_URI).apply()
+    private fun readPickedUris(): List<Uri> {
+        // Migrates the single-track key so an existing selection is not lost.
+        prefs.getString(KEY_TRACK_URI, null)?.let { legacy ->
+            prefs.edit()
+                .remove(KEY_TRACK_URI)
+                .putStringSet(KEY_TRACK_URIS, setOf(legacy))
+                .apply()
+            return listOfNotNull(runCatching { Uri.parse(legacy) }.getOrNull())
+        }
+        return prefs.getStringSet(KEY_TRACK_URIS, emptySet())
+            .orEmpty()
+            .sorted()
+            .mapNotNull { runCatching { Uri.parse(it) }.getOrNull() }
+    }
+
+    private fun writePickedUris() {
+        prefs.edit().putStringSet(KEY_TRACK_URIS, pickedUris.map { it.toString() }.toSet()).apply()
+    }
+
+    private fun namedTracks() = tracks.map { NamedTrack(it.name, it.track) }
+
+    /**
+     * Narrows [tracks] to the ones covering [captureTimes] and builds a
+     * geotagger from them, logging what it decided. Null when there is nothing
+     * left to match against, which is not an error: the photos still import,
+     * and the Tag tab can place them once the right track turns up.
+     */
+    private fun geotaggerFor(captureTimes: List<Instant>, tolerance: Duration): Geotagger? {
+        val available = namedTracks()
+        if (available.isEmpty()) {
+            log("No track selected — importing without geotagging.")
+            postActiveTracks(emptySet())
+            return null
+        }
+        val choice = TrackSelection.choose(available, captureTimes, tolerance)
+        choice.lines().forEach(::log)
+        postActiveTracks(choice.used.map { it.name }.toSet())
+        return choice.used.takeIf { it.isNotEmpty() }?.let { Geotagger(choice.track, tolerance) }
+    }
+
+    private fun postActiveTracks(names: Set<String>) {
+        viewModelScope.launch(Dispatchers.Main.immediate) { activeTrackNames = names }
     }
 
     /**
@@ -200,6 +336,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         if (running) return
         running = true
         logLines.clear()
+        activeTrackNames = null
         postPhase(Phase.Busy("Preparing…", 0, 0))
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -261,26 +398,6 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         }
         val tolerance = Duration.ofMinutes(toleranceMinutes.trim().toLongOrNull() ?: 30L)
 
-        // Load the track up front so a broken file aborts before anything is copied.
-        val track = trackUri?.let { uri ->
-            try {
-                app.contentResolver.openInputStream(uri)!!.use { TrackParser.parse(it) }
-            } catch (e: Exception) {
-                fail("Failed to read track file: ${e.message ?: e}")
-                return
-            }
-        }
-        when {
-            track == null ->
-                log("No track file selected — importing without geotagging.")
-            track.isEmpty -> {
-                fail("Track file contains no timestamped points — cannot geotag.")
-                return
-            }
-            else ->
-                log("Loaded ${track.size} track points from ${trackName ?: "track file"}.")
-        }
-
         val storageManager = app.getSystemService(StorageManager::class.java)
         val volume = storageManager.storageVolumes
             .firstOrNull { it.isRemovable && it.state == Environment.MEDIA_MOUNTED }
@@ -302,22 +419,27 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val destBase = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
 
         val captureTime = CaptureTimeResolver(AndroidExifDateReader, assumedZone, cameraClockOffset)
-        val geotagger = track?.let { Geotagger(it, tolerance) }
         val importer = PhotoImporter(source, destBase, captureTime, ::log)
-        val plan = importer.plan(startFn, startTs, gpsWriter) { geotagger }
+        // The track is picked here rather than up front: which recordings are
+        // worth matching against only becomes answerable once the photos on the
+        // card have been read.
+        var geotagger: Geotagger? = null
+        val plan = importer.plan(startFn, startTs, gpsWriter) { times ->
+            geotaggerFor(times, tolerance).also { geotagger = it }
+        }
 
         if (plan.isEmpty) {
             log("Nothing to import.")
             postPhase(
                 Phase.Done(
                     ImportSummary(
-                        null, 0, PhotoImporter.describe(emptyList()), track != null, 0, 0, 0
+                        null, 0, PhotoImporter.describe(emptyList()), geotagger != null, 0, 0, 0
                     )
                 )
             )
             return
         }
-        pendingContext = PendingImport(importer, geotagger, captureTime, track != null)
+        pendingContext = PendingImport(importer, geotagger, captureTime, geotagger != null)
         postPhase(Phase.Planned(plan))
     }
 
@@ -423,6 +545,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         if (running) return
         running = true
         logLines.clear()
+        activeTrackNames = null
         tagPhase = Phase.Busy("Preparing…", 0, 0)
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -436,24 +559,13 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun prepareTagPlan(folder: File) {
-        val app = getApplication<Application>()
-        val uri = trackUri ?: run {
+        val available = namedTracks()
+        if (available.isEmpty()) {
             postTagPhase(Phase.Failed("Select a GPS track first."))
-            return
-        }
-        val track = try {
-            app.contentResolver.openInputStream(uri)!!.use { TrackParser.parse(it) }
-        } catch (e: Exception) {
-            postTagPhase(Phase.Failed("Failed to read track file: ${e.message ?: e}"))
-            return
-        }
-        if (track.isEmpty) {
-            postTagPhase(Phase.Failed("Track file contains no timestamped points."))
             return
         }
 
         val tolerance = Duration.ofMinutes(toleranceMinutes.trim().toLongOrNull() ?: 30L)
-        val geotagger = Geotagger(track, tolerance)
         val captureTime = CaptureTimeResolver(AndroidExifDateReader, assumedZone, cameraClockOffset)
 
         val files = folder.listFiles { f ->
@@ -465,9 +577,22 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
+        val timed = files.map { it to captureTime.instantOf(it) }
+        val choice = TrackSelection.choose(available, timed.map { it.second }, tolerance)
+        choice.lines().forEach(::log)
+        postActiveTracks(choice.used.map { it.name }.toSet())
+        if (choice.used.isEmpty()) {
+            postTagPhase(
+                Phase.Failed(
+                    choice.lines().joinToString(" ").ifEmpty { "No track covers these photos." }
+                )
+            )
+            return
+        }
+        val geotagger = Geotagger(choice.track, tolerance)
+
         // Tagging happens in place, so source and destination are the same file.
-        val entries = files.map { file ->
-            val time = captureTime.instantOf(file)
+        val entries = timed.map { (file, time) ->
             val resolved = geotagger.resolve(time)
             val fix = resolved?.point
             PlannedFile(
@@ -624,7 +749,13 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_TOLERANCE = "tolerance"
         const val KEY_PHOTO_ZONE = "photoZone"
         const val KEY_CLOCK_OFFSET = "clockOffset"
+
+        /** The single-track key, read once at startup and migrated away. */
         const val KEY_TRACK_URI = "trackUri"
+        const val KEY_TRACK_URIS = "trackUris"
+        const val KEY_USE_RECORDED = "useRecordedTracks"
+
+        val TRACK_EXTENSIONS = setOf("gpx", "kml")
 
         val TIMESTAMP_PATTERNS = listOf(
             "yyyy-MM-dd HH:mm:ss",

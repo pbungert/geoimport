@@ -39,6 +39,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.EditLocationAlt
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -555,6 +556,121 @@ private fun loadRecordedTracks(): List<DisplayTrack> =
 
 private enum class ResumeMode { Auto, ByFile, ByTime }
 
+private val TRACK_SPAN_FORMAT = DateTimeFormatter.ofPattern("d MMM HH:mm")
+
+/**
+ * Picks the tracks an import may draw on. Several at once, because a trip is
+ * usually several recordings - and which of them a given import actually needs
+ * is worked out from the photos rather than asked for, so the honest answer to
+ * "which track?" is normally "all of them, sort it out for me".
+ */
+@Composable
+private fun TrackSelector(viewModel: ImportViewModel) {
+    val tracks = viewModel.tracks
+    val active = viewModel.activeTrackNames
+
+    val pickTracks = rememberLauncherForActivityResult(OpenTrackDocuments()) { uris ->
+        if (uris.isNotEmpty()) viewModel.addTracks(uris)
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(
+            onClick = { pickTracks.launch(arrayOf("*/*")) },
+            modifier = Modifier.weight(1f),
+        ) {
+            Icon(Icons.Filled.Place, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Add GPS tracks…", maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (viewModel.hasPickedTracks) {
+            TextButton(onClick = viewModel::clearPickedTracks) { Text("Clear") }
+        }
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { viewModel.setUseRecordedTracks(!viewModel.useRecordedTracks) },
+    ) {
+        Checkbox(
+            checked = viewModel.useRecordedTracks,
+            onCheckedChange = { viewModel.setUseRecordedTracks(it) },
+        )
+        Text("Use my recorded tracks", style = MaterialTheme.typography.bodyMedium)
+    }
+
+    Text(
+        when {
+            viewModel.tracksLoading && tracks.isEmpty() -> "Reading tracks…"
+            tracks.isEmpty() ->
+                "No tracks selected — photos will be imported without geotagging."
+            else ->
+                "${tracks.size} track${if (tracks.size == 1) "" else "s"} available. " +
+                    "The import uses the ones covering your photos."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    for (loaded in tracks) {
+        // Once a plan exists the set narrows to what it matched against; before
+        // that every track is still a candidate.
+        val inUse = active?.contains(loaded.name) ?: true
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    loaded.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = if (inUse) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    describeSpan(loaded) + if (inUse) "" else " — outside this import",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (!loaded.fromRecorder) {
+                IconButton(onClick = { viewModel.removeTrack(loaded.key) }) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "Remove ${loaded.name}",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
+    }
+
+    val shown = tracks.filter { active?.contains(it.name) ?: true }
+    if (shown.isNotEmpty()) {
+        var mapFullscreen by rememberSaveable { mutableStateOf(false) }
+        val displayTracks = shown.map { DisplayTrack(it.name, it.track) }
+        TrackMap(
+            displayTracks,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(220.dp)
+                .clip(MaterialTheme.shapes.medium),
+            onExpand = { mapFullscreen = true },
+        )
+        if (mapFullscreen) {
+            FullscreenTrackMapDialog(displayTracks) { mapFullscreen = false }
+        }
+    }
+}
+
+private fun describeSpan(loaded: ImportViewModel.LoadedTrack): String {
+    val span = loaded.track.span ?: return "no timestamps"
+    val zone = ZoneId.systemDefault()
+    val points = "${loaded.track.size} points"
+    return "$points · ${TRACK_SPAN_FORMAT.format(span.start.atZone(zone))} – " +
+        TRACK_SPAN_FORMAT.format(span.endInclusive.atZone(zone))
+}
+
 @Composable
 private fun ImportTab(
     viewModel: ImportViewModel,
@@ -565,58 +681,12 @@ private fun ImportTab(
     var advancedOpen by rememberSaveable { mutableStateOf(false) }
     var resumeMode by rememberSaveable { mutableStateOf(ResumeMode.Auto) }
 
-    val pickTrack = rememberLauncherForActivityResult(OpenTrackDocument()) { uri ->
-        uri?.let(viewModel::selectTrack)
-    }
-
     Column(modifier = modifier) {
         Column(
             modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // Track selector
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(
-                    onClick = { pickTrack.launch(arrayOf("*/*")) },
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Filled.Place, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        viewModel.trackName ?: "Select GPS track…",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                if (viewModel.trackUri != null) {
-                    TextButton(onClick = viewModel::clearTrack) { Text("Clear") }
-                }
-            }
-            Text(
-                if (viewModel.trackUri != null) "Photos will be geotagged from this track."
-                else "No track selected — photos will be imported without geotagging.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            val track = viewModel.trackPoints
-            if (viewModel.trackUri != null && track != null && !track.isEmpty) {
-                var mapFullscreen by rememberSaveable { mutableStateOf(false) }
-                val displayTracks = listOf(
-                    DisplayTrack(viewModel.trackName ?: "Selected track", track)
-                )
-                TrackMap(
-                    displayTracks,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(220.dp)
-                        .clip(MaterialTheme.shapes.medium),
-                    onExpand = { mapFullscreen = true },
-                )
-                if (mapFullscreen) {
-                    FullscreenTrackMapDialog(displayTracks) { mapFullscreen = false }
-                }
-            }
+            TrackSelector(viewModel)
 
             AdvancedOptions(
                 open = advancedOpen,
@@ -773,13 +843,15 @@ private fun TagTab(viewModel: ImportViewModel, modifier: Modifier = Modifier) {
         ) {
             Text(
                 "Writes positions into photos already on this device. " +
-                    "Uses the track, tolerance and clock offset from the Import tab.",
+                    "Uses the tracks, tolerance and clock offset from the Import tab.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             Text(
-                viewModel.trackName?.let { "Track: $it" } ?: "No track selected - pick one on the Import tab.",
+                viewModel.tracks.takeIf { it.isNotEmpty() }
+                    ?.let { "${it.size} track${if (it.size == 1) "" else "s"} available; the ones covering the folder are used." }
+                    ?: "No tracks selected - pick some on the Import tab.",
                 style = MaterialTheme.typography.bodyMedium,
             )
 
@@ -819,7 +891,7 @@ private fun TagTab(viewModel: ImportViewModel, modifier: Modifier = Modifier) {
         if (planned == null) {
             Button(
                 onClick = { viewModel.startTagging() },
-                enabled = !viewModel.running && viewModel.tagFolder != null && viewModel.trackName != null,
+                enabled = !viewModel.running && viewModel.tagFolder != null && viewModel.tracks.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
             ) {
                 Icon(Icons.Filled.EditLocationAlt, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -1165,10 +1237,10 @@ private fun LogScreen(lines: List<String>, onClose: () -> Unit) {
 }
 
 /**
- * OpenDocument that starts in the app's recorded-tracks folder when at least
- * one recorded track exists there.
+ * OpenMultipleDocuments that starts in the app's recorded-tracks folder when at
+ * least one recorded track exists there.
  */
-private class OpenTrackDocument : ActivityResultContracts.OpenDocument() {
+private class OpenTrackDocuments : ActivityResultContracts.OpenMultipleDocuments() {
     override fun createIntent(context: Context, input: Array<String>): Intent {
         val intent = super.createIntent(context, input)
         recordedTracksDirUri()?.let {
