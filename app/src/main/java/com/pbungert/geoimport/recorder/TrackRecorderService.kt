@@ -111,7 +111,7 @@ class TrackRecorderService : Service() {
         }
 
         writer = try {
-            GpxWriter(File(tracksDir(), "$name.gpx"), name)
+            GpxWriter(File(tracksDir(), "$name.gpx"), name).also { scanTrack(it.file) }
         } catch (_: Exception) {
             prefs().edit().clear().apply()
             stopSelf()
@@ -257,6 +257,16 @@ class TrackRecorderService : Service() {
         )
     }
 
+    /**
+     * Tells the media database the file is there, once when it is created and
+     * again when it is finished. Without the first call a track stays invisible
+     * to file managers and to a PC over USB for the whole run - and invisible
+     * for good if the process is killed before it stops.
+     */
+    private fun scanTrack(file: File) {
+        MediaScannerConnection.scanFile(this, arrayOf(file.path), arrayOf(GPX_MIME), null)
+    }
+
     private fun stopRecording() {
         prefs().edit().clear().apply()
         cleanup()
@@ -269,7 +279,7 @@ class TrackRecorderService : Service() {
         releaseWakeLock()
         writer?.let {
             it.close()
-            MediaScannerConnection.scanFile(this, arrayOf(it.file.path), null, null)
+            scanTrack(it.file)
         }
         writer = null
         state.value = null
@@ -353,6 +363,9 @@ class TrackRecorderService : Service() {
 
         private const val CHANNEL_ID = "track_recording"
         private const val NOTIFICATION_ID = 42
+
+        /** What a .gpx is, told to the media database so file managers list it. */
+        private const val GPX_MIME = "application/gpx+xml"
         private const val PREFS = "recorder"
         private const val KEY_ACTIVE = "active"
         private const val KEY_PAUSED = "paused"
