@@ -9,6 +9,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -34,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -97,12 +100,17 @@ private val LOCATION_PROVIDERS = listOf(
  * Map showing [tracks] as colored polylines with a dot on each track's latest
  * point. The camera fits all points whenever they change, so a live recording
  * stays in view. [onExpand], when set, adds a full-screen button overlay.
+ *
+ * [contentPadding] is the part of the map something else covers - a bottom
+ * sheet, say. The ornaments move inside it and the camera fits the track into
+ * what is left, so neither ends up under the thing on top.
  */
 @Composable
 fun TrackMap(
     tracks: List<DisplayTrack>,
     modifier: Modifier = Modifier,
     onExpand: (() -> Unit)? = null,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
     val cameraState = rememberCameraState()
     val styleState = rememberStyleState()
@@ -159,8 +167,22 @@ fun TrackMap(
         else Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
     }
 
+    val layoutDirection = LocalLayoutDirection.current
+    // 48dp of breathing room inside whatever the caller left uncovered.
+    val fitPadding = remember(contentPadding, layoutDirection) {
+        PaddingValues(
+            start = contentPadding.calculateStartPadding(layoutDirection) + 48.dp,
+            top = contentPadding.calculateTopPadding() + 48.dp,
+            end = contentPadding.calculateEndPadding(layoutDirection) + 48.dp,
+            bottom = contentPadding.calculateBottomPadding() + 48.dp,
+        )
+    }
+
     val pointCount = tracks.sumOf { it.points.size }
-    LaunchedEffect(pointCount) {
+    // Names as well as the count: switching between two track sets of the same
+    // size is a different view and has to refit.
+    val trackNames = tracks.map { it.name }
+    LaunchedEffect(pointCount, trackNames, fitPadding) {
         if (followingMyLocation) return@LaunchedEffect
         val points = tracks.flatMap { it.points }
         if (points.isEmpty()) return@LaunchedEffect
@@ -179,7 +201,7 @@ fun TrackMap(
                     southwest = Position(west, south),
                     northeast = Position(east, north),
                 ),
-                padding = PaddingValues(48.dp),
+                padding = fitPadding,
             )
         }
     }
@@ -257,14 +279,14 @@ fun TrackMap(
             color = Color.Black.copy(alpha = 0.42f),
             haloColor = Color.White.copy(alpha = 0.55f),
             haloWidth = 1.5.dp,
-            modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
+            modifier = Modifier.align(Alignment.BottomStart).padding(contentPadding).padding(8.dp),
         )
         var attributionExpanded by remember { mutableStateOf(false) }
         ExpandingAttributionButton(
             expanded = attributionExpanded,
             onClick = { attributionExpanded = !attributionExpanded },
             styleState = styleState,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(contentPadding).padding(4.dp),
         )
         FilledTonalIconButton(
             onClick = {
@@ -278,7 +300,10 @@ fun TrackMap(
                 }
             },
             // Sits one row above the attribution button in the same corner.
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = 48.dp),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(contentPadding)
+                .padding(end = 8.dp, bottom = 48.dp),
         ) {
             if (locating) {
                 CircularProgressIndicator(
@@ -293,7 +318,7 @@ fun TrackMap(
         if (onExpand != null) {
             FilledTonalIconButton(
                 onClick = onExpand,
-                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                modifier = Modifier.align(Alignment.TopEnd).padding(contentPadding).padding(8.dp),
             ) {
                 Icon(Icons.Filled.Fullscreen, contentDescription = "Full screen map")
             }
