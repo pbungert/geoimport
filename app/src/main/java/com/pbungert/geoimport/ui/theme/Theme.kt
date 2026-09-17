@@ -2,12 +2,15 @@ package com.pbungert.geoimport.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
@@ -85,6 +88,18 @@ private val LightColorScheme = lightColorScheme(
     inversePrimary = md_light_inversePrimary,
     scrim = md_light_scrim,
 )
+
+/**
+ * The red of the record dot, which is a signifier rather than an error: it has
+ * to read as "this is the record button" at a glance, so it stays intense in
+ * both themes instead of following [ColorScheme.error], whose dark-theme value
+ * is a muted salmon meant to sit behind body text.
+ *
+ * Picked off the scheme's own surface so it follows whichever theme is in
+ * force, including a future dynamic one.
+ */
+val ColorScheme.recordRed: Color
+    get() = if (surface.luminance() > 0.5f) md_light_record else md_dark_record
 
 @Composable
 fun GeoimportTheme(
