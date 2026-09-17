@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Environment
 import android.os.storage.StorageManager
 import android.os.storage.StorageVolume
+import android.util.Log
 import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -51,8 +52,17 @@ sealed interface Phase {
     /** Preview: what the import would do, awaiting confirmation. */
     data class Planned(val plan: ImportPlan) : Phase
 
-    /** [total] == 0 means the work is indeterminate (no count yet). */
-    data class Busy(val label: String, val current: Int, val total: Int) : Phase
+    /**
+     * [total] == 0 means the work is indeterminate (no count yet). [detail] is
+     * the line under the count - the file being handled, or how the placing is
+     * going - so a long run says more than a bar creeping along.
+     */
+    data class Busy(
+        val label: String,
+        val current: Int,
+        val total: Int,
+        val detail: String? = null,
+    ) : Phase
     data class Done(val summary: ImportSummary) : Phase
     data class Failed(val message: String) : Phase
 }
@@ -96,20 +106,17 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private inner class SavedFlag(private val key: String, default: Boolean) {
-        private val state = mutableStateOf(prefs.getBoolean(key, default))
-        operator fun getValue(thisRef: Any?, property: KProperty<*>) = state.value
-        operator fun setValue(thisRef: Any?, property: KProperty<*>, value: Boolean) {
-            state.value = value
-            prefs.edit().putBoolean(key, value).apply()
-        }
-    }
-
     // Per-run, deliberately not persisted: a stale resume point is dangerous.
     var startFilename by mutableStateOf("")
     var startTimestamp by mutableStateOf("")
 
     var toleranceMinutes by Saved(KEY_TOLERANCE, "30")
+
+    /**
+     * Minutes between recorded points, kept across runs: it follows how you
+     * travel, not which day it is, so it is nearly always the same as last time.
+     */
+    var recordIntervalMinutes by Saved(KEY_RECORD_INTERVAL, "1")
 
     /**
      * Zone the camera's clock was set to, used only when it recorded no
@@ -168,12 +175,32 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     /**
-     * Whether the app's own recording folder counts as selected. On by default:
-     * the tracks it holds were recorded for exactly this, and the time filter
-     * keeps the irrelevant ones out without anybody having to say so.
+     * Tracks chosen by hand, by name. Empty means "work it out", which is the
+     * usual case and the better answer: the import narrows the whole set to
+     * what covers the photos, and a folder of recordings is mostly days this
+     * import knows nothing about.
+     *
+     * Deliberately not persisted. A selection made for one trip is wrong for
+     * the next, and a stale one would silently leave photos unplaced.
      */
-    private var recordedTracksEnabled by SavedFlag(KEY_USE_RECORDED, true)
-    val useRecordedTracks get() = recordedTracksEnabled
+    var selectedTrackNames by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    fun toggleTrackSelected(name: String) {
+        selectedTrackNames = if (name in selectedTrackNames) {
+            selectedTrackNames - name
+        } else {
+            selectedTrackNames + name
+        }
+    }
+
+    fun selectAllTracks() {
+        selectedTrackNames = tracks.map { it.name }.toSet()
+    }
+
+    fun clearTrackSelection() {
+        selectedTrackNames = emptySet()
+    }
 
     /** Tracks picked through the document picker, in the order they were added. */
     private var pickedUris: List<Uri> = emptyList()
@@ -186,12 +213,6 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         pickedUris = readPickedUris()
-        refreshTracks()
-    }
-
-    fun setUseRecordedTracks(enabled: Boolean) {
-        if (recordedTracksEnabled == enabled) return
-        recordedTracksEnabled = enabled
         refreshTracks()
     }
 
@@ -209,7 +230,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         refreshTracks()
     }
 
-    /** Drops a picked track. Recorded ones are governed by [useRecordedTracks]. */
+    /** Drops a track that was added by hand; recorded ones stay. */
     fun removeTrack(key: String) {
         val uri = pickedUris.firstOrNull { it.toString() == key } ?: return
         runCatching {
@@ -244,25 +265,31 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshTracks() {
         val app = getApplication<Application>()
         val picked = pickedUris
-        val includeRecorded = recordedTracksEnabled
         tracksLoading = true
         // The last plan chose from a different set, so its verdict is stale.
         activeTrackNames = null
         viewModelScope.launch(Dispatchers.IO) {
             val loaded = buildList {
-                if (includeRecorded) {
-                    TrackRecorderService.tracksDir()
-                        .listFiles { f -> f.isFile && f.extension.lowercase() in TRACK_EXTENSIONS }
-                        ?.sortedBy { it.name }
-                        ?.forEach { file ->
-                            val track = runCatching {
-                                file.inputStream().use { TrackParser.parse(it) }
-                            }.getOrNull()
-                            if (track != null && !track.isEmpty) {
-                                add(LoadedTrack(file.path, file.nameWithoutExtension, track, true))
-                            }
+                // Everything this app recorded is always on offer. Excluding
+                // the folder wholesale used to be a switch; ticking the tracks
+                // you want says the same thing without a second kind of "off".
+                TrackRecorderService.tracksDir()
+                    .listFiles { f -> f.isFile && f.extension.lowercase() in TRACK_EXTENSIONS }
+                    ?.sortedBy { it.name }
+                    ?.forEach { file ->
+                        val track = runCatching {
+                            file.inputStream().use { TrackParser.parse(it) }
+                        }.onFailure {
+                            // Loud on purpose. A parser that rejected every file
+                            // on Android while the desktop tests stayed green
+                            // went unnoticed for months, because this swallowed
+                            // the reason without a word.
+                            Log.w("geoimport", "Could not read ${file.name}: ${it.message ?: it}", it)
+                        }.getOrNull()
+                        if (track != null && !track.isEmpty) {
+                            add(LoadedTrack(file.path, file.nameWithoutExtension, track, true))
                         }
-                }
+                    }
                 for (uri in picked) {
                     val track = runCatching {
                         app.contentResolver.openInputStream(uri)!!.use { TrackParser.parse(it) }
@@ -278,6 +305,10 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             val distinct = loaded.distinctBy { it.name }
             launch(Dispatchers.Main.immediate) {
                 tracks = distinct
+                // A track that is gone cannot stay selected, or an import would
+                // narrow itself to nothing and quietly place no photos.
+                val names = distinct.map { it.name }.toSet()
+                selectedTrackNames = selectedTrackNames intersect names
                 tracksLoading = false
             }
         }
@@ -302,7 +333,10 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putStringSet(KEY_TRACK_URIS, pickedUris.map { it.toString() }.toSet()).apply()
     }
 
-    private fun namedTracks() = tracks.map { NamedTrack(it.name, it.track) }
+    /** What an import may draw on: the hand-picked set, or everything. */
+    private fun namedTracks() = tracks
+        .filter { selectedTrackNames.isEmpty() || it.name in selectedTrackNames }
+        .map { NamedTrack(it.name, it.track) }
 
     /**
      * Narrows [tracks] to the ones covering [captureTimes] and builds a
@@ -443,6 +477,22 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         postPhase(Phase.Planned(plan))
     }
 
+    /**
+     * Progress while positions are being written. The running count of misses
+     * is the useful part: a number climbing here means the tracks do not cover
+     * these photos, which is worth knowing before the summary says so.
+     */
+    private fun placing(done: Int, total: Int, missed: Int) = Phase.Busy(
+        label = "Placing positions",
+        current = done,
+        total = total,
+        detail = if (missed > 0) {
+            "$missed so far had no track nearby"
+        } else {
+            "$done placed on a track"
+        },
+    )
+
     /** Everything [executePlan] needs that the plan itself does not carry. */
     private class PendingImport(
         val importer: PhotoImporter,
@@ -460,9 +510,9 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        postPhase(Phase.Busy("Importing photos", 0, plan.selected.size))
-        val result = context.importer.execute(plan) { done, total ->
-            postPhase(Phase.Busy("Importing photos", done, total))
+        postPhase(Phase.Busy("Copying", 0, plan.selected.size))
+        val result = context.importer.execute(plan) { done, total, justCopied ->
+            postPhase(Phase.Busy("Copying", done, total, justCopied))
         }
 
         var exifTagged = 0
@@ -470,13 +520,13 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         var notTagged = 0
         if (context.geotagger != null) {
             val total = result.copied.size
-            postPhase(Phase.Busy("Geotagging", 0, total))
+            postPhase(Phase.Busy("Placing positions", 0, total))
             for ((index, file) in result.copied.withIndex()) {
                 val point = context.geotagger.locate(context.captureTime.instantOf(file))
                 if (point == null) {
                     log("No track point within tolerance for ${file.name} - not geotagged.")
                     notTagged++
-                    postPhase(Phase.Busy("Geotagging", index + 1, total))
+                    postPhase(placing(index + 1, total, notTagged))
                     continue
                 }
                 // The chain embeds where it can - Lightroom for Android ignores
@@ -492,7 +542,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                     log("Could not geotag ${file.name}: ${e.message ?: e}")
                     notTagged++
                 }
-                postPhase(Phase.Busy("Geotagging", index + 1, total))
+                postPhase(placing(index + 1, total, notTagged))
             }
             log(
                 "Geotagged ${exifTagged + sidecarTagged} of ${result.copied.size} files " +
@@ -749,11 +799,11 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_TOLERANCE = "tolerance"
         const val KEY_PHOTO_ZONE = "photoZone"
         const val KEY_CLOCK_OFFSET = "clockOffset"
+        const val KEY_RECORD_INTERVAL = "recordInterval"
 
         /** The single-track key, read once at startup and migrated away. */
         const val KEY_TRACK_URI = "trackUri"
         const val KEY_TRACK_URIS = "trackUris"
-        const val KEY_USE_RECORDED = "useRecordedTracks"
 
         val TRACK_EXTENSIONS = setOf("gpx", "kml")
 

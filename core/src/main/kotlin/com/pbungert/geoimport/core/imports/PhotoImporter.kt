@@ -29,7 +29,7 @@ class PhotoImporter(
     fun run(
         startFilename: String?,
         startTimestamp: LocalDateTime?,
-        onCopyProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+        onCopyProgress: (done: Int, total: Int, justCopied: String?) -> Unit = { _, _, _ -> },
     ): ImportResult = execute(plan(startFilename, startTimestamp), onCopyProgress)
 
     /**
@@ -87,7 +87,7 @@ class PhotoImporter(
      */
     fun execute(
         plan: ImportPlan,
-        onCopyProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+        onCopyProgress: (done: Int, total: Int, justCopied: String?) -> Unit = { _, _, _ -> },
     ): ImportResult {
         val selected = plan.selected
         if (selected.isEmpty()) return ImportResult(emptyList(), null)
@@ -98,7 +98,7 @@ class PhotoImporter(
         val copied = mutableListOf<File>()
         val failed = mutableListOf<String>()
         val total = selected.size
-        onCopyProgress(0, total)
+        onCopyProgress(0, total, null)
         for ((index, entry) in selected.withIndex()) {
             log("Copying ${entry.source.name}...")
             try {
@@ -109,7 +109,7 @@ class PhotoImporter(
                 log("Could not copy ${entry.source.name}: ${e.message ?: e}")
                 failed.add(entry.source.name)
             }
-            onCopyProgress(index + 1, total)
+            onCopyProgress(index + 1, total, entry.source.name)
         }
         if (failed.isNotEmpty()) {
             log("${failed.size} of $total files could not be copied: ${failed.joinToString(", ")}")

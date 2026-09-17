@@ -86,7 +86,7 @@ class ImportCommand : CliktCommand(name = "import") {
             return
         }
 
-        val result = importer.execute(plan) { done, total ->
+        val result = importer.execute(plan) { done, total, _ ->
             if (done == total) echo("Copied $done of $total files.")
         }
 
