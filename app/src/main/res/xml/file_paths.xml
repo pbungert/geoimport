@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Only the recorded tracks are shared, so only that folder is exposed. The
+    provider can hand out any path listed here, and a share needs one file.
+-->
+<paths>
+    <external-path name="tracks" path="Documents/GPS-Tracks/" />
+</paths>

@@ -39,6 +39,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Lets a track be handed to another app; a file:// URI cannot be. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <service
             android:name=".recorder.TrackRecorderService"
             android:exported="false"
