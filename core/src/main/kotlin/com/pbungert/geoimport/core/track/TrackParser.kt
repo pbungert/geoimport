@@ -5,6 +5,7 @@ import com.pbungert.geoimport.core.model.TrackPoint
 import org.xml.sax.Attributes
 import org.xml.sax.SAXException
 import org.xml.sax.helpers.DefaultHandler
+import java.io.BufferedInputStream
 import java.io.InputStream
 import java.time.Instant
 import java.time.LocalDateTime
@@ -30,6 +31,13 @@ import javax.xml.parsers.SAXParserFactory
 object TrackParser {
 
     /**
+     * How far into a file the DOCTYPE check looks. A prolog that has not
+     * declared one within 8 KiB is not going to, and this buffer is allocated
+     * for every track file read.
+     */
+    private const val PROLOG_BYTES = 8 * 1024
+
+    /**
      * [zoneForLocalTimes] interprets timestamps that carry no offset. Defaults
      * to the machine's zone, which is only right when the track was recorded
      * where the import runs.
@@ -39,8 +47,10 @@ object TrackParser {
         zoneForLocalTimes: ZoneId = ZoneId.systemDefault(),
     ): Track {
         val handler = TrackHandler(zoneForLocalTimes)
+        val stream = BufferedInputStream(input, PROLOG_BYTES)
+        rejectDoctype(stream)
         try {
-            newParser().parse(input, handler)
+            newParser().parse(stream, handler)
         } catch (e: SAXException) {
             (e.cause as? IllegalArgumentException)?.let { throw it }
             throw IllegalArgumentException("Could not parse track file: ${e.message}", e)
@@ -48,11 +58,56 @@ object TrackParser {
         return Track(handler.finish())
     }
 
+    /**
+     * Hardening is applied one feature at a time and never fatally. Android's
+     * SAX factory (Apache Harmony) does not recognise FEATURE_SECURE_PROCESSING
+     * and throws SAXNotRecognizedException rather than ignoring it, so setting
+     * it outright made every track file on a phone fail to parse - the app
+     * could write tracks and never read one back.
+     *
+     * Refusing a DOCTYPE outright is the protection that matters here, and it
+     * covers entity expansion and external entities on its own; the rest are
+     * belt and braces for parsers that accept them.
+     */
     private fun newParser() = SAXParserFactory.newInstance().apply {
         isNamespaceAware = true
-        setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
-        runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
+        isValidating = false
+        setFeatureQuietly("http://apache.org/xml/features/disallow-doctype-decl", true)
+        setFeatureQuietly("http://xml.org/sax/features/external-general-entities", false)
+        setFeatureQuietly("http://xml.org/sax/features/external-parameter-entities", false)
+        setFeatureQuietly(XMLConstants.FEATURE_SECURE_PROCESSING, true)
     }.newSAXParser()
+
+    private fun SAXParserFactory.setFeatureQuietly(name: String, value: Boolean) {
+        runCatching { setFeature(name, value) }
+    }
+
+    /**
+     * Android accepts none of the hardening features above - it neither honours
+     * disallow-doctype-decl nor admits it was asked - so the one protection
+     * that has to hold is done by hand, before the parser sees the bytes. No
+     * DOCTYPE means no entity expansion and no external entities, on every
+     * platform, whatever the parser underneath believes.
+     */
+    private fun rejectDoctype(stream: BufferedInputStream) {
+        stream.mark(PROLOG_BYTES)
+        val head = ByteArray(PROLOG_BYTES)
+        var read = 0
+        while (read < head.size) {
+            val count = stream.read(head, read, head.size - read)
+            if (count < 0) break
+            read += count
+        }
+        stream.reset()
+        // Latin-1 so the search is over bytes: the marker is ASCII, and any
+        // multi-byte content around it cannot forge or hide it.
+        val prolog = String(head, 0, read, Charsets.ISO_8859_1)
+        if (prolog.contains("<!DOCTYPE", ignoreCase = true)) {
+            throw IllegalArgumentException(
+                "Track file declares a DOCTYPE, which is not accepted."
+            )
+        }
+    }
 
     private class TrackHandler(private val zone: ZoneId) : DefaultHandler() {
 
