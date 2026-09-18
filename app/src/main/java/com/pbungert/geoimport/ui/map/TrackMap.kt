@@ -99,7 +99,9 @@ private val LOCATION_PROVIDERS = listOf(
 /**
  * Map showing [tracks] as colored polylines with a dot on each track's latest
  * point. The camera fits all points whenever they change, so a live recording
- * stays in view. [onExpand], when set, adds a full-screen button overlay.
+ * stays in view, and a different set of [tracks] is always framed - choosing
+ * tracks shows them even if the map was centred on the device's own position.
+ * [onExpand], when set, adds a full-screen button overlay.
  *
  * [contentPadding] is the part of the map something else covers - a bottom
  * sheet, say. The ornaments move inside it and the camera fits the track into
@@ -182,10 +184,19 @@ fun TrackMap(
     // Names as well as the count: switching between two track sets of the same
     // size is a different view and has to refit.
     val trackNames = tracks.map { it.name }
+    // Which set the camera was last framed on. A different set means the user
+    // picked other tracks, and that outranks wherever the camera is pointing -
+    // including at the blue dot.
+    var framedNames by remember { mutableStateOf<List<String>?>(null) }
     LaunchedEffect(pointCount, trackNames, fitPadding) {
-        if (followingMyLocation) return@LaunchedEffect
+        val pickedOtherTracks = trackNames != framedNames
+        if (followingMyLocation && !pickedOtherTracks) return@LaunchedEffect
         val points = tracks.flatMap { it.points }
         if (points.isEmpty()) return@LaunchedEffect
+        // Only once there is something to frame, so an empty selection leaves
+        // the camera where it was and the next real one still counts as new.
+        framedNames = trackNames
+        if (pickedOtherTracks) followingMyLocation = false
         val south = points.minOf { it.lat }
         val north = points.maxOf { it.lat }
         val west = points.minOf { it.lon }
