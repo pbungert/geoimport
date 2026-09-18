@@ -2,14 +2,9 @@ package com.pbungert.geoimport.core.geotag
 
 import com.pbungert.geoimport.core.model.Track
 import com.pbungert.geoimport.core.model.TrackPoint
+import com.pbungert.geoimport.core.model.distanceMeters
 import java.time.Duration
 import java.time.Instant
-import kotlin.math.asin
-import kotlin.math.cos
-import kotlin.math.min
-import kotlin.math.pow
-import kotlin.math.sin
-import kotlin.math.sqrt
 
 /**
  * Matches photo capture times against a track.
@@ -87,15 +82,6 @@ class Geotagger(track: Track, private val tolerance: Duration) {
             if (this[mid].time.isBefore(time)) low = mid + 1 else high = mid
         }
         return low
-    }
-
-    private fun distanceMeters(a: TrackPoint, b: TrackPoint): Double {
-        val r = 6_371_000.0
-        val dLat = Math.toRadians(b.lat - a.lat)
-        val dLon = Math.toRadians(b.lon - a.lon)
-        val h = sin(dLat / 2).pow(2) +
-            cos(Math.toRadians(a.lat)) * cos(Math.toRadians(b.lat)) * sin(dLon / 2).pow(2)
-        return 2 * r * asin(min(1.0, sqrt(h)))
     }
 
     private fun interpolate(a: TrackPoint, b: TrackPoint, time: Instant): TrackPoint {

@@ -124,12 +124,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pbungert.geoimport.core.imports.ImportPlan
 import com.pbungert.geoimport.core.imports.PlannedFile
 import com.pbungert.geoimport.core.model.Track
+import com.pbungert.geoimport.core.model.distanceMeters
 import com.pbungert.geoimport.recorder.RecordingState
 import com.pbungert.geoimport.recorder.TrackRecorderService
 import com.pbungert.geoimport.ui.map.DisplayTrack
 import com.pbungert.geoimport.ui.map.FullscreenTrackMapDialog
 import com.pbungert.geoimport.ui.map.TrackMap
-import com.pbungert.geoimport.ui.map.distanceMeters
 import com.pbungert.geoimport.ui.map.formatDistance
 import com.pbungert.geoimport.ui.theme.GeoimportTheme
 import com.pbungert.geoimport.ui.theme.recordRed
