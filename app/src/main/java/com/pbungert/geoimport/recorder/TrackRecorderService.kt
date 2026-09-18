@@ -33,6 +33,10 @@ data class RecordingState(
     val pointCount: Int,
     val paused: Boolean = false,
     val droppedCount: Int = 0,
+    /** When the current pause began, or null while recording. */
+    val pausedAtMillis: Long? = null,
+    /** Time spent in pauses that have already ended. */
+    val pausedTotalMillis: Long = 0,
 )
 
 /**
@@ -82,6 +86,9 @@ class TrackRecorderService : Service() {
                     .putBoolean(KEY_PAUSED, false)
                     .putLong(KEY_INTERVAL, interval)
                     .putString(KEY_NAME, name)
+                    .putLong(KEY_STARTED_AT, System.currentTimeMillis())
+                    .putLong(KEY_PAUSED_TOTAL, 0L)
+                    .remove(KEY_PAUSED_AT)
                     .apply()
                 startRecording(name, interval, paused = false)
             }
@@ -119,7 +126,18 @@ class TrackRecorderService : Service() {
         }
 
         this.intervalMillis = intervalMillis
-        state.value = RecordingState("$name.gpx", System.currentTimeMillis(), 0, paused)
+        // The clock is read back from preferences rather than started here, so
+        // a sticky restart resumes the run's own elapsed time instead of
+        // claiming the recording began the moment the process came back.
+        val p = prefs()
+        state.value = RecordingState(
+            fileName = "$name.gpx",
+            startedAtMillis = p.getLong(KEY_STARTED_AT, System.currentTimeMillis()),
+            pointCount = 0,
+            paused = paused,
+            pausedAtMillis = p.getLong(KEY_PAUSED_AT, 0L).takeIf { it > 0L },
+            pausedTotalMillis = p.getLong(KEY_PAUSED_TOTAL, 0L),
+        )
 
         startForeground(
             NOTIFICATION_ID,
@@ -138,8 +156,9 @@ class TrackRecorderService : Service() {
         if (writer == null || s.paused) return
         stopLocationUpdates()
         releaseWakeLock()
-        prefs().edit().putBoolean(KEY_PAUSED, true).apply()
-        state.value = s.copy(paused = true)
+        val pausedAt = System.currentTimeMillis()
+        prefs().edit().putBoolean(KEY_PAUSED, true).putLong(KEY_PAUSED_AT, pausedAt).apply()
+        state.value = s.copy(paused = true, pausedAtMillis = pausedAt)
         updateNotification()
     }
 
@@ -154,8 +173,14 @@ class TrackRecorderService : Service() {
         }
         requestLocationUpdates()
         acquireWakeLock()
-        prefs().edit().putBoolean(KEY_PAUSED, false).apply()
-        state.value = s.copy(paused = false)
+        val pausedTotal = s.pausedTotalMillis +
+            (s.pausedAtMillis?.let { System.currentTimeMillis() - it } ?: 0L)
+        prefs().edit()
+            .putBoolean(KEY_PAUSED, false)
+            .putLong(KEY_PAUSED_TOTAL, pausedTotal)
+            .remove(KEY_PAUSED_AT)
+            .apply()
+        state.value = s.copy(paused = false, pausedAtMillis = null, pausedTotalMillis = pausedTotal)
         updateNotification()
     }
 
@@ -371,6 +396,11 @@ class TrackRecorderService : Service() {
         private const val KEY_PAUSED = "paused"
         private const val KEY_INTERVAL = "interval"
         private const val KEY_NAME = "name"
+
+        // The elapsed clock, kept here so it survives a sticky restart.
+        private const val KEY_STARTED_AT = "startedAt"
+        private const val KEY_PAUSED_AT = "pausedAt"
+        private const val KEY_PAUSED_TOTAL = "pausedTotal"
 
         /** Null while idle; observed by the UI to show recording progress. */
         val state = MutableStateFlow<RecordingState?>(null)

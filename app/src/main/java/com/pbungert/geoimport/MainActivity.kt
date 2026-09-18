@@ -851,12 +851,18 @@ private fun RecordingStatus(
     onPauseResume: () -> Unit,
 ) {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    // Nothing moves while paused, so the ticker stops with the recording.
     LaunchedEffect(recording.paused) {
-        while (true) {
+        while (!recording.paused) {
             now = System.currentTimeMillis()
             delay(1000)
         }
     }
+    // A pause stops the clock rather than merely stopping the fixes: the
+    // reading is how long was recorded, not how long ago you started. Reading
+    // up to pausedAtMillis also keeps a stale `now` out of the sum.
+    val elapsedMillis =
+        (recording.pausedAtMillis ?: now) - recording.startedAtMillis - recording.pausedTotalMillis
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -872,7 +878,7 @@ private fun RecordingStatus(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 buildString {
-                    append(elapsed(now - recording.startedAtMillis))
+                    append(elapsed(elapsedMillis))
                     if (distanceMeters != null) append(" · ${formatDistance(distanceMeters)}")
                 },
                 style = MaterialTheme.typography.titleSmall,
