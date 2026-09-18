@@ -265,6 +265,47 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     val hasPickedTracks get() = pickedUris.isNotEmpty()
 
     /**
+     * Parses one file out of the recording folder, or null when it holds
+     * nothing usable.
+     *
+     * The failure is logged rather than swallowed. A parser that rejected
+     * every file on Android while the desktop tests stayed green went
+     * unnoticed for months, because this said nothing about why.
+     */
+    private fun loadRecordedTrack(file: File): LoadedTrack? {
+        val track = runCatching { file.inputStream().use { TrackParser.parse(it) } }
+            .onFailure {
+                Log.w("geoimport", "Could not read ${file.name}: ${it.message ?: it}", it)
+            }
+            .getOrNull()
+        if (track == null || track.isEmpty) return null
+        return LoadedTrack(file.path, file.nameWithoutExtension, track, true)
+    }
+
+    /**
+     * Re-reads the single file a recording is appending to.
+     *
+     * The track being recorded grows by a point every interval, and nothing
+     * else in the folder can have changed in between - so [refreshTracks] here
+     * would re-parse every recording you have ever made, once per fix, to
+     * learn one new point.
+     */
+    fun refreshRecordingTrack(fileName: String) {
+        val file = File(TrackRecorderService.tracksDir(), fileName)
+        viewModelScope.launch {
+            val loaded = withContext(Dispatchers.IO) { loadRecordedTrack(file) } ?: return@launch
+            val index = tracks.indexOfFirst { it.name == loaded.name }
+            // Appending covers the first fix of a fresh recording; the list is
+            // ordered for display by the caller, so position here is free.
+            tracks = if (index < 0) {
+                tracks + loaded
+            } else {
+                tracks.toMutableList().also { it[index] = loaded }
+            }
+        }
+    }
+
+    /**
      * Re-reads everything on offer. A picked file whose grant is gone - revoked,
      * or the file deleted - drops out quietly rather than taking the rest of the
      * selection down with it, which is what the single-track version did.
@@ -283,20 +324,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                 TrackRecorderService.tracksDir()
                     .listFiles { f -> f.isFile && f.extension.lowercase() in TRACK_EXTENSIONS }
                     ?.sortedBy { it.name }
-                    ?.forEach { file ->
-                        val track = runCatching {
-                            file.inputStream().use { TrackParser.parse(it) }
-                        }.onFailure {
-                            // Loud on purpose. A parser that rejected every file
-                            // on Android while the desktop tests stayed green
-                            // went unnoticed for months, because this swallowed
-                            // the reason without a word.
-                            Log.w("geoimport", "Could not read ${file.name}: ${it.message ?: it}", it)
-                        }.getOrNull()
-                        if (track != null && !track.isEmpty) {
-                            add(LoadedTrack(file.path, file.nameWithoutExtension, track, true))
-                        }
-                    }
+                    ?.forEach { file -> loadRecordedTrack(file)?.let(::add) }
                 for (uri in picked) {
                     val track = runCatching {
                         app.contentResolver.openInputStream(uri)!!.use { TrackParser.parse(it) }

@@ -234,12 +234,19 @@ private fun HomeScreen(
     var showPlaceSheet by rememberSaveable { mutableStateOf(false) }
 
     // One source for the tracks, the view model's, so the list here and the
-    // list in the import settings cannot drift apart. Re-read as the recording
-    // grows and whenever an import finishes: both change what there is to show.
-    LaunchedEffect(recording?.fileName, recording?.pointCount, viewModel.phase) {
+    // list in the import settings cannot drift apart. A finished import is what
+    // changes which tracks and which folders there are to show.
+    LaunchedEffect(viewModel.phase) {
         viewModel.refreshTracks()
-        lastImport = withContext(Dispatchers.IO) { describeLastImport(viewModel) }
-        importFolders = withContext(Dispatchers.IO) { viewModel.importFolders() }
+        val folders = withContext(Dispatchers.IO) { viewModel.importFolders() }
+        importFolders = folders
+        lastImport = withContext(Dispatchers.IO) { describeLastImport(folders) }
+    }
+
+    // A running recording appends to exactly one file, so between fixes that
+    // is the only one worth reading again.
+    LaunchedEffect(recording?.fileName, recording?.pointCount) {
+        recording?.let { viewModel.refreshRecordingTrack(it.fileName) }
     }
 
     // Once a launch is enough: this only has to catch up files the recorder
@@ -473,8 +480,8 @@ private fun orderedTracks(viewModel: ImportViewModel): List<ImportViewModel.Load
     viewModel.tracks.sortedByDescending { it.track.span?.endInclusive ?: Instant.MIN }
 
 /** "Import 06, 48 photos", or null when nothing has ever been imported. */
-private fun describeLastImport(viewModel: ImportViewModel): String? {
-    val folder = viewModel.importFolders().firstOrNull() ?: return null
+private fun describeLastImport(folders: List<File>): String? {
+    val folder = folders.firstOrNull() ?: return null
     val count = folder.listFiles { f -> f.isFile && !f.name.endsWith(".xmp", ignoreCase = true) }
         ?.size
         ?: return folder.name
