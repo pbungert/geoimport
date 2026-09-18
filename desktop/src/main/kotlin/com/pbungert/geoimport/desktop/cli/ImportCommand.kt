@@ -13,6 +13,7 @@ import com.pbungert.geoimport.core.geotag.Geotagger
 import com.pbungert.geoimport.core.geotag.GpsWriteResult
 import com.pbungert.geoimport.core.imports.ImportPlan
 import com.pbungert.geoimport.core.imports.PhotoImporter
+import com.pbungert.geoimport.core.imports.parseResumeTimestamp
 import com.pbungert.geoimport.core.track.TrackSelection
 import java.io.File
 
@@ -142,6 +143,6 @@ class ImportCommand : CliktCommand(name = "import") {
     /** `auto` / null means the watermark; otherwise a filename or a timestamp. */
     private fun parseResume(value: String?) = when {
         value == null || value.equals("auto", ignoreCase = true) -> null to null
-        else -> parseTimestamp(value)?.let { null to it } ?: (value to null)
+        else -> parseResumeTimestamp(value)?.let { null to it } ?: (value to null)
     }
 }

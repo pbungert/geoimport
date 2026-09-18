@@ -25,6 +25,7 @@ import com.pbungert.geoimport.core.imports.CaptureTimeResolver
 import com.pbungert.geoimport.core.imports.ImportPlan
 import com.pbungert.geoimport.core.imports.PlannedFile
 import com.pbungert.geoimport.core.imports.PhotoImporter
+import com.pbungert.geoimport.core.imports.parseResumeTimestamp
 import com.pbungert.geoimport.core.model.Track
 import com.pbungert.geoimport.core.track.NamedTrack
 import com.pbungert.geoimport.core.track.TrackParser
@@ -38,11 +39,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.Duration
 import java.time.Instant
-import java.time.LocalDate
-import java.time.LocalDateTime
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeParseException
 import kotlin.reflect.KProperty
 import kotlin.math.roundToLong
 
@@ -445,7 +442,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val startFn = startFilename.trim().ifEmpty { null }
         val startTsText = startTimestamp.trim().ifEmpty { null }
         val startTs = startTsText?.let {
-            parseTimestampInput(it) ?: run {
+            parseResumeTimestamp(it) ?: run {
                 fail("Could not parse timestamp '$it'. Use e.g. 2026-07-17 14:30.")
                 return
             }
@@ -793,20 +790,6 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         postPhase(Phase.Failed(message))
     }
 
-    private fun parseTimestampInput(text: String): LocalDateTime? {
-        for (pattern in TIMESTAMP_PATTERNS) {
-            try {
-                return LocalDateTime.parse(text, DateTimeFormatter.ofPattern(pattern))
-            } catch (_: DateTimeParseException) {
-            }
-        }
-        try {
-            return LocalDate.parse(text).atStartOfDay()
-        } catch (_: DateTimeParseException) {
-        }
-        return null
-    }
-
     private fun queryDisplayName(uri: Uri): String? =
         getApplication<Application>().contentResolver
             .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
@@ -825,11 +808,5 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_TRACK_URI = "trackUri"
         const val KEY_TRACK_URIS = "trackUris"
 
-        val TIMESTAMP_PATTERNS = listOf(
-            "yyyy-MM-dd HH:mm:ss",
-            "yyyy-MM-dd HH:mm",
-            "yyyy-MM-dd'T'HH:mm:ss",
-            "yyyy-MM-dd'T'HH:mm",
-        )
     }
 }
