@@ -716,8 +716,13 @@ private fun TrackList(
             for (track in recordedHere + addedByHand) {
                 if (grouped && track === addedByHand.firstOrNull()) TrackGroupLabel("Added")
                 // Summing a track's length walks every point, so it is worked
-                // out once per track rather than on every recomposition.
-                val measured = remember(track.key) { trackSummary(track.track, zone) }
+                // out once per track rather than on every recomposition. The
+                // point count has to be part of the key: a recording keeps its
+                // path while it grows, so on the path alone the row for the run
+                // in progress would freeze at whatever it read first.
+                val measured = remember(track.key, track.track.size) {
+                    trackSummary(track.track, zone)
+                }
                 TrackRow(
                     name = track.name,
                     summary = buildString {
