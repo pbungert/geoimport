@@ -11,7 +11,8 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.split
 import com.github.ajalt.clikt.parameters.types.file
 import com.pbungert.geoimport.core.geotag.Geotagger
-import com.pbungert.geoimport.core.geotag.GpsWriteResult
+import com.pbungert.geoimport.core.geotag.GeotagTarget
+import com.pbungert.geoimport.core.geotag.writeGeotags
 import com.pbungert.geoimport.core.imports.PhotoImporter
 import com.pbungert.geoimport.core.track.TrackSelection
 import java.io.File
@@ -79,42 +80,38 @@ class TagCommand : CliktCommand(name = "tag") {
         }
 
         val nameWidth = files.maxOf { it.name.length }
-        var embedded = 0
-        var sidecars = 0
-        var skipped = 0
-        var failed = 0
+        val targets = timed.map { (file, time) -> GeotagTarget(file, geotagger.locate(time)) }
 
-        for ((file, time) in timed) {
-            val fix = geotagger.locate(time)
-            if (fix == null) {
-                echo("  ${file.name.padEnd(nameWidth)}  $time  no match within tolerance")
-                skipped++
-                continue
-            }
-            val backend = writer.effectiveWriterFor(file)?.name ?: "-"
-            val where = "%9.5f, %9.5f".format(fix.lat, fix.lon)
-            if (dryRun) {
-                echo("  ${file.name.padEnd(nameWidth)}  $time  $where [$backend]")
-                continue
-            }
-            try {
-                when (writer.write(file, fix)) {
-                    is GpsWriteResult.Embedded -> embedded++
-                    is GpsWriteResult.Sidecar -> sidecars++
-                }
-                echo("  ${file.name.padEnd(nameWidth)}  $time  $where [$backend]")
-            } catch (e: Exception) {
-                echo("  could not tag ${file.name}: ${e.message ?: e}", err = true)
-                failed++
+        /** One row of the report: name, capture time, and where it landed. */
+        fun row(index: Int, where: String) =
+            echo("  ${files[index].name.padEnd(nameWidth)}  ${timed[index].second}  $where")
+
+        fun placement(target: GeotagTarget): String {
+            val fix = target.fix ?: return "no match within tolerance"
+            val backend = writer.effectiveWriterFor(target.file)?.name ?: "-"
+            return "%9.5f, %9.5f".format(fix.lat, fix.lon) + " [$backend]"
+        }
+
+        if (dryRun) {
+            targets.forEachIndexed { index, target -> row(index, placement(target)) }
+            echo("")
+            val would = targets.count { it.fix != null }
+            echo("$would of ${files.size} would be tagged. Nothing was written (--dry-run).")
+            return
+        }
+
+        var index = 0
+        val counts = writeGeotags(targets, writer) { target, _, error ->
+            val at = index++
+            if (error != null) {
+                echo("  could not tag ${target.file.name}: ${error.message ?: error}", err = true)
+            } else {
+                row(at, placement(target))
             }
         }
 
         echo("")
-        if (dryRun) {
-            echo("${files.size - skipped} of ${files.size} would be tagged. Nothing was written (--dry-run).")
-        } else {
-            echo("Tagged ${embedded + sidecars} of ${files.size} files " +
-                "($embedded embedded, $sidecars sidecars, ${skipped + failed} untagged).")
-        }
+        echo("Tagged ${counts.written} of ${files.size} files " +
+            "(${counts.embedded} embedded, ${counts.sidecars} sidecars, ${counts.untagged} untagged).")
     }
 }

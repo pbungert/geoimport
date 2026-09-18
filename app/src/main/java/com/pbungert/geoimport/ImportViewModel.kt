@@ -19,7 +19,9 @@ import androidx.lifecycle.viewModelScope
 import com.pbungert.geoimport.core.geotag.BuiltInGpsWriter
 import com.pbungert.geoimport.core.geotag.FallbackGpsWriter
 import com.pbungert.geoimport.core.geotag.Geotagger
-import com.pbungert.geoimport.core.geotag.GpsWriteResult
+import com.pbungert.geoimport.core.geotag.GeotagCounts
+import com.pbungert.geoimport.core.geotag.GeotagTarget
+import com.pbungert.geoimport.core.geotag.writeGeotags
 import com.pbungert.geoimport.core.geotag.XmpSidecarWriter
 import com.pbungert.geoimport.core.imports.CaptureTimeResolver
 import com.pbungert.geoimport.core.imports.ImportPlan
@@ -532,38 +534,32 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             postPhase(Phase.Busy("Copying", done, total, justCopied))
         }
 
-        var exifTagged = 0
-        var sidecarTagged = 0
-        var notTagged = 0
+        var counts = GeotagCounts()
         if (context.geotagger != null) {
+            // The chain embeds where it can - Lightroom for Android ignores XMP
+            // sidecars, so a RAF position has to live in its EXIF block - and
+            // falls back to a sidecar for anything else.
             val total = result.copied.size
             postPhase(Phase.Busy("Placing positions", 0, total))
-            for ((index, file) in result.copied.withIndex()) {
-                val point = context.geotagger.locate(context.captureTime.instantOf(file))
-                if (point == null) {
-                    log("No track point within tolerance for ${file.name} - not geotagged.")
-                    notTagged++
-                    postPhase(placing(index + 1, total, notTagged))
-                    continue
+            var done = 0
+            var missed = 0
+            counts = writeGeotags(
+                result.copied.map {
+                    GeotagTarget(it, context.geotagger.locate(context.captureTime.instantOf(it)))
+                },
+                gpsWriter,
+            ) { target, _, error ->
+                when {
+                    error != null -> log("Could not geotag ${target.file.name}: ${error.message ?: error}")
+                    target.fix == null ->
+                        log("No track point within tolerance for ${target.file.name} - not geotagged.")
                 }
-                // The chain embeds where it can - Lightroom for Android ignores
-                // XMP sidecars, so a RAF position has to live in its EXIF block
-                // - and falls back to a sidecar for anything else. A file that
-                // fails outright is reported and the run continues.
-                try {
-                    when (gpsWriter.write(file, point)) {
-                        is GpsWriteResult.Embedded -> exifTagged++
-                        is GpsWriteResult.Sidecar -> sidecarTagged++
-                    }
-                } catch (e: Exception) {
-                    log("Could not geotag ${file.name}: ${e.message ?: e}")
-                    notTagged++
-                }
-                postPhase(placing(index + 1, total, notTagged))
+                if (error != null || target.fix == null) missed++
+                postPhase(placing(++done, total, missed))
             }
             log(
-                "Geotagged ${exifTagged + sidecarTagged} of ${result.copied.size} files " +
-                    "($exifTagged EXIF, $sidecarTagged XMP sidecars)."
+                "Geotagged ${counts.written} of $total files " +
+                    "(${counts.embedded} EXIF, ${counts.sidecars} XMP sidecars)."
             )
         }
 
@@ -579,9 +575,9 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                     copied = result.copied.size,
                     breakdown = PhotoImporter.describe(result.copied),
                     geotagAttempted = context.hasTrack,
-                    exifTagged = exifTagged,
-                    sidecarTagged = sidecarTagged,
-                    notTagged = notTagged,
+                    exifTagged = counts.embedded,
+                    sidecarTagged = counts.sidecars,
+                    notTagged = counts.untagged,
                 )
             )
         )
@@ -710,34 +706,26 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     private fun executeTagPlan(plan: ImportPlan) {
         val app = getApplication<Application>()
         val targets = plan.selected
-        var exifTagged = 0
-        var sidecarTagged = 0
-        var notTagged = 0
 
         postTagPhase(Phase.Busy("Geotagging", 0, targets.size))
-        for ((index, entry) in targets.withIndex()) {
-            val fix = entry.fix
-            if (fix == null) {
-                log("No track point within tolerance for ${entry.source.name} - not geotagged.")
-                notTagged++
-            } else {
-                try {
-                    when (gpsWriter.write(entry.source, fix)) {
-                        is GpsWriteResult.Embedded -> exifTagged++
-                        is GpsWriteResult.Sidecar -> sidecarTagged++
-                    }
-                } catch (e: Exception) {
-                    log("Could not geotag ${entry.source.name}: ${e.message ?: e}")
-                    notTagged++
-                }
+        var done = 0
+        val counts = writeGeotags(
+            // Tagging happens in place, so the file written is the file planned.
+            targets.map { GeotagTarget(it.source, it.fix) },
+            gpsWriter,
+        ) { target, _, error ->
+            when {
+                error != null -> log("Could not geotag ${target.file.name}: ${error.message ?: error}")
+                target.fix == null ->
+                    log("No track point within tolerance for ${target.file.name} - not geotagged.")
             }
-            postTagPhase(Phase.Busy("Geotagging", index + 1, targets.size))
+            postTagPhase(Phase.Busy("Geotagging", ++done, targets.size))
         }
 
         MediaScannerConnection.scanFile(
             app, targets.map { it.source.path }.toTypedArray(), null, null
         )
-        log("Tagged ${exifTagged + sidecarTagged} of ${targets.size} files.")
+        log("Tagged ${counts.written} of ${targets.size} files.")
         postTagPhase(
             Phase.Done(
                 ImportSummary(
@@ -745,9 +733,9 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                     copied = targets.size,
                     breakdown = PhotoImporter.describe(targets.map { it.source }),
                     geotagAttempted = true,
-                    exifTagged = exifTagged,
-                    sidecarTagged = sidecarTagged,
-                    notTagged = notTagged,
+                    exifTagged = counts.embedded,
+                    sidecarTagged = counts.sidecars,
+                    notTagged = counts.untagged,
                 )
             )
         )

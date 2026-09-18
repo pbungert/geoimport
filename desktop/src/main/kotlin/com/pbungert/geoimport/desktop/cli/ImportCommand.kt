@@ -10,7 +10,8 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.file
 import com.pbungert.geoimport.core.geotag.Geotagger
-import com.pbungert.geoimport.core.geotag.GpsWriteResult
+import com.pbungert.geoimport.core.geotag.GeotagTarget
+import com.pbungert.geoimport.core.geotag.writeGeotags
 import com.pbungert.geoimport.core.imports.ImportPlan
 import com.pbungert.geoimport.core.imports.PhotoImporter
 import com.pbungert.geoimport.core.imports.parseResumeTimestamp
@@ -93,26 +94,25 @@ class ImportCommand : CliktCommand(name = "import") {
 
         if (geotagger == null) return
 
-        var embedded = 0
-        var sidecars = 0
-        var failed = 0
-        for (entry in plan.selected) {
-            val fix = entry.fix ?: continue
-            val copied = File(plan.destFolder, entry.source.name)
-            if (!copied.exists()) continue
-            try {
-                when (writer.write(copied, fix)) {
-                    is GpsWriteResult.Embedded -> embedded++
-                    is GpsWriteResult.Sidecar -> sidecars++
-                }
-            } catch (e: Exception) {
-                echo("  could not geotag ${copied.name}: ${e.message ?: e}", err = true)
-                failed++
+        // The plan's entries name the source files; what gets tagged is the
+        // copy, and anything that failed to copy is simply not there to tag.
+        val counts = writeGeotags(
+            plan.selected.mapNotNull { entry ->
+                val fix = entry.fix ?: return@mapNotNull null
+                File(plan.destFolder, entry.source.name)
+                    .takeIf { it.exists() }
+                    ?.let { GeotagTarget(it, fix) }
+            },
+            writer,
+        ) { target, _, error ->
+            if (error != null) {
+                echo("  could not geotag ${target.file.name}: ${error.message ?: error}", err = true)
             }
         }
         echo(
-            "Geotagged ${embedded + sidecars} of ${result.copied.size} files " +
-                "($embedded embedded, $sidecars sidecars, ${plan.withoutFix + failed} untagged)."
+            "Geotagged ${counts.written} of ${result.copied.size} files " +
+                "(${counts.embedded} embedded, ${counts.sidecars} sidecars, " +
+                "${plan.withoutFix + counts.failed} untagged)."
         )
     }
 
