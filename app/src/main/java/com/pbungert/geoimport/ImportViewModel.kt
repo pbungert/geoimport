@@ -34,6 +34,7 @@ import com.pbungert.geoimport.platform.AndroidExifDateReader
 import com.pbungert.geoimport.platform.AndroidJpegGpsWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.Duration
 import java.time.Instant
@@ -205,6 +206,12 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     /** Tracks picked through the document picker, in the order they were added. */
     private var pickedUris: List<Uri> = emptyList()
 
+    /**
+     * Whether a run holds the view model. Written only on the main thread,
+     * like every other state here: the work goes into `withContext(IO)` rather
+     * than the whole coroutine, so the `finally` that clears this runs where
+     * Compose can see it.
+     */
     var running by mutableStateOf(false)
         private set
     var phase by mutableStateOf<Phase>(Phase.Idle)
@@ -372,9 +379,9 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         logLines.clear()
         activeTrackNames = null
         postPhase(Phase.Busy("Preparing…", 0, 0))
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             try {
-                preparePlan()
+                withContext(Dispatchers.IO) { preparePlan() }
             } catch (e: Exception) {
                 fail("Import failed: ${e.message ?: e}")
             } finally {
@@ -387,9 +394,9 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val planned = phase as? Phase.Planned ?: return
         if (running) return
         running = true
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             try {
-                executePlan(planned.plan)
+                withContext(Dispatchers.IO) { executePlan(planned.plan) }
             } catch (e: Exception) {
                 fail("Import failed: ${e.message ?: e}")
             } finally {
@@ -597,9 +604,9 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         logLines.clear()
         activeTrackNames = null
         tagPhase = Phase.Busy("Preparing…", 0, 0)
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             try {
-                prepareTagPlan(folder)
+                withContext(Dispatchers.IO) { prepareTagPlan(folder) }
             } catch (e: Exception) {
                 postTagPhase(Phase.Failed("Tagging failed: ${e.message ?: e}"))
             } finally {
@@ -661,9 +668,9 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val planned = tagPhase as? Phase.Planned ?: return
         if (running) return
         running = true
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             try {
-                executeTagPlan(planned.plan)
+                withContext(Dispatchers.IO) { executeTagPlan(planned.plan) }
             } catch (e: Exception) {
                 postTagPhase(Phase.Failed("Tagging failed: ${e.message ?: e}"))
             } finally {
