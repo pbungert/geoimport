@@ -71,7 +71,7 @@ class TracksList : CliktCommand(name = "list") {
 
     override fun run() {
         val files = tracksDir.listFiles { f ->
-            f.isFile && f.extension.lowercase() in TRACK_EXTENSIONS
+            f.isFile && f.extension.lowercase() in TrackParser.EXTENSIONS
         }?.sortedByDescending { it.lastModified() }.orEmpty()
 
         if (files.isEmpty()) {

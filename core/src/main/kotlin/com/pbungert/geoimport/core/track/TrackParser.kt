@@ -30,6 +30,9 @@ import javax.xml.parsers.SAXParserFactory
  */
 object TrackParser {
 
+    /** The file kinds [parse] understands, lowercase and without the dot. */
+    val EXTENSIONS = setOf("gpx", "kml")
+
     /**
      * How far into a file the DOCTYPE check looks. A prolog that has not
      * declared one within 8 KiB is not going to, and this buffer is allocated

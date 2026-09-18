@@ -307,7 +307,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                 // the folder wholesale used to be a switch; ticking the tracks
                 // you want says the same thing without a second kind of "off".
                 TrackRecorderService.tracksDir()
-                    .listFiles { f -> f.isFile && f.extension.lowercase() in TRACK_EXTENSIONS }
+                    .listFiles { f -> f.isFile && f.extension.lowercase() in TrackParser.EXTENSIONS }
                     ?.sortedBy { it.name }
                     ?.forEach { file -> loadRecordedTrack(file)?.let(::add) }
                 for (uri in picked) {
@@ -824,8 +824,6 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         /** The single-track key, read once at startup and migrated away. */
         const val KEY_TRACK_URI = "trackUri"
         const val KEY_TRACK_URIS = "trackUris"
-
-        val TRACK_EXTENSIONS = setOf("gpx", "kml")
 
         val TIMESTAMP_PATTERNS = listOf(
             "yyyy-MM-dd HH:mm:ss",

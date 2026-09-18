@@ -96,7 +96,7 @@ class GeotagOptions : OptionGroup("Geotagging") {
             NamedTrack(file.nameWithoutExtension, track)
         }
         val scanned = tracksDir
-            ?.listFiles { f -> f.isFile && f.extension.lowercase() in TRACK_EXTENSIONS }
+            ?.listFiles { f -> f.isFile && f.extension.lowercase() in TrackParser.EXTENSIONS }
             ?.sortedBy { it.name }
             ?.mapNotNull { file ->
                 runCatching { file.inputStream().use { TrackParser.parse(it, zone) } }
@@ -131,9 +131,6 @@ class GeotagOptions : OptionGroup("Geotagging") {
         }
     }
 }
-
-/** What `--tracks-dir` and `tracks list` recognise as a track file. */
-val TRACK_EXTENSIONS = setOf("gpx", "kml")
 
 /**
  * Directory of the installed application, where jpackage puts the bundled
