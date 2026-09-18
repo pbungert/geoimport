@@ -213,9 +213,93 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
      */
     var running by mutableStateOf(false)
         private set
-    var phase by mutableStateOf<Phase>(Phase.Idle)
-        private set
     val logLines = mutableStateListOf<String>()
+
+    /**
+     * One of the two runs this app does: copying photos off a card, and
+     * placing photos already here. They are the same machine - prepare a plan,
+     * show it, confirm it, report - so only the work they do differs.
+     *
+     * Two instances rather than one because the preview of one has to survive
+     * the other: finishing an import and going on to place the photos it could
+     * not place must not throw away either screen's state.
+     */
+    inner class Job(private val failureLabel: String) {
+
+        var phase by mutableStateOf<Phase>(Phase.Idle)
+            private set
+
+        /**
+         * Builds the preview. Nothing is written until [confirm]; the plan it
+         * produces is the same object execution consumes, so the list on
+         * screen cannot disagree with what happens.
+         */
+        fun start(prepare: () -> Unit) {
+            if (running) return
+            running = true
+            logLines.clear()
+            activeTrackNames = null
+            post(Phase.Busy("Preparing…", 0, 0))
+            inBackground(prepare)
+        }
+
+        fun confirm(execute: (ImportPlan) -> Unit) {
+            val planned = phase as? Phase.Planned ?: return
+            if (running) return
+            running = true
+            inBackground { execute(planned.plan) }
+        }
+
+        /** A run in progress keeps going - the notification says so. */
+        fun cancel() {
+            if (running) return
+            post(Phase.Idle)
+        }
+
+        /** Includes or excludes one file before the run is confirmed. */
+        fun setSelected(source: File, selected: Boolean) {
+            val plan = (phase as? Phase.Planned)?.plan ?: return
+            post(
+                Phase.Planned(
+                    plan.copy(
+                        entries = plan.entries.map {
+                            if (it.source == source) it.copy(selected = selected) else it
+                        }
+                    )
+                )
+            )
+        }
+
+        fun post(next: Phase) {
+            viewModelScope.launch(Dispatchers.Main.immediate) { phase = next }
+        }
+
+        /** Logs [message] and moves this job into the failed state. */
+        fun fail(message: String) {
+            log(message)
+            post(Phase.Failed(message))
+        }
+
+        private fun inBackground(work: () -> Unit) {
+            viewModelScope.launch {
+                try {
+                    withContext(Dispatchers.IO) { work() }
+                } catch (e: Exception) {
+                    fail("$failureLabel: ${e.message ?: e}")
+                } finally {
+                    running = false
+                }
+            }
+        }
+    }
+
+    private val importJob = Job("Import failed")
+
+    /** Independent of [phase] so a preview on one screen survives the other. */
+    private val tagJob = Job("Tagging failed")
+
+    val phase get() = importJob.phase
+    val tagPhase get() = tagJob.phase
 
     init {
         pickedUris = readPickedUris()
@@ -380,62 +464,13 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.Main.immediate) { activeTrackNames = names }
     }
 
-    /**
-     * Builds the preview. Nothing is written until [confirmImport]; the plan
-     * it produces is the same object execution consumes, so the list on
-     * screen cannot disagree with what happens.
-     */
-    fun startImport() {
-        if (running) return
-        running = true
-        logLines.clear()
-        activeTrackNames = null
-        postPhase(Phase.Busy("Preparing…", 0, 0))
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { preparePlan() }
-            } catch (e: Exception) {
-                fail("Import failed: ${e.message ?: e}")
-            } finally {
-                running = false
-            }
-        }
-    }
+    fun startImport() = importJob.start(::preparePlan)
 
-    fun confirmImport() {
-        val planned = phase as? Phase.Planned ?: return
-        if (running) return
-        running = true
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { executePlan(planned.plan) }
-            } catch (e: Exception) {
-                fail("Import failed: ${e.message ?: e}")
-            } finally {
-                running = false
-            }
-        }
-    }
+    fun confirmImport() = importJob.confirm(::executePlan)
 
-    fun cancelPlan() {
-        if (running) return
-        postPhase(Phase.Idle)
-    }
+    fun cancelPlan() = importJob.cancel()
 
-    /** Includes or excludes one file before the import is confirmed. */
-    fun setSelected(source: File, selected: Boolean) {
-        val planned = phase as? Phase.Planned ?: return
-        val plan = planned.plan
-        postPhase(
-            Phase.Planned(
-                plan.copy(
-                    entries = plan.entries.map {
-                        if (it.source == source) it.copy(selected = selected) else it
-                    }
-                )
-            )
-        )
-    }
+    fun setSelected(source: File, selected: Boolean) = importJob.setSelected(source, selected)
 
     private fun preparePlan() {
         val app = getApplication<Application>()
@@ -445,7 +480,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val startTsText = startTimestamp.trim().ifEmpty { null }
         val startTs = startTsText?.let {
             parseResumeTimestamp(it) ?: run {
-                fail("Could not parse timestamp '$it'. Use e.g. 2026-07-17 14:30.")
+                importJob.fail("Could not parse timestamp '$it'. Use e.g. 2026-07-17 14:30.")
                 return
             }
         }
@@ -455,12 +490,12 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val volume = storageManager.storageVolumes
             .firstOrNull { it.isRemovable && it.state == Environment.MEDIA_MOUNTED }
         if (volume == null) {
-            fail("No SD card found. Insert a card and try again.")
+            importJob.fail("No SD card found. Insert a card and try again.")
             return
         }
         val volumeDir = resolveVolumeDirectory(volume)
         if (volumeDir == null) {
-            fail(
+            importJob.fail(
                 "SD card '${volume.getDescription(app)}' is mounted but not readable by the app " +
                     "(tried ${listOfNotNull(volume.directory?.path, volume.uuid?.let { "/storage/$it" }).joinToString(", ")})."
             )
@@ -483,7 +518,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
 
         if (plan.isEmpty) {
             log("Nothing to import.")
-            postPhase(
+            importJob.post(
                 Phase.Done(
                     ImportSummary(
                         null, 0, PhotoImporter.describe(emptyList()), geotagger != null, 0, 0, 0
@@ -493,7 +528,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         pendingContext = PendingImport(importer, geotagger, captureTime, geotagger != null)
-        postPhase(Phase.Planned(plan))
+        importJob.post(Phase.Planned(plan))
     }
 
     /**
@@ -525,13 +560,13 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     private fun executePlan(plan: ImportPlan) {
         val app = getApplication<Application>()
         val context = pendingContext ?: run {
-            fail("The preview expired. Run the import again.")
+            importJob.fail("The preview expired. Run the import again.")
             return
         }
 
-        postPhase(Phase.Busy("Copying", 0, plan.selected.size))
+        importJob.post(Phase.Busy("Copying", 0, plan.selected.size))
         val result = context.importer.execute(plan) { done, total, justCopied ->
-            postPhase(Phase.Busy("Copying", done, total, justCopied))
+            importJob.post(Phase.Busy("Copying", done, total, justCopied))
         }
 
         var counts = GeotagCounts()
@@ -540,7 +575,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             // sidecars, so a RAF position has to live in its EXIF block - and
             // falls back to a sidecar for anything else.
             val total = result.copied.size
-            postPhase(Phase.Busy("Placing positions", 0, total))
+            importJob.post(Phase.Busy("Placing positions", 0, total))
             var done = 0
             var missed = 0
             counts = writeGeotags(
@@ -555,7 +590,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                         log("No track point within tolerance for ${target.file.name} - not geotagged.")
                 }
                 if (error != null || target.fix == null) missed++
-                postPhase(placing(++done, total, missed))
+                importJob.post(placing(++done, total, missed))
             }
             log(
                 "Geotagged ${counts.written} of $total files " +
@@ -568,7 +603,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         )
         log("Import complete! ${result.copied.size} files in '${result.destFolder?.name}'.")
         pendingContext = null
-        postPhase(
+        importJob.post(
             Phase.Done(
                 ImportSummary(
                     destFolder = result.destFolder?.name,
@@ -584,10 +619,6 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // --- Tagging photos already imported --------------------------------
-
-    /** Independent of [phase] so a preview on one tab survives the other. */
-    var tagPhase by mutableStateOf<Phase>(Phase.Idle)
-        private set
 
     var tagFolder by mutableStateOf<File?>(null)
 
@@ -605,26 +636,13 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
 
     fun startTagging() {
         val folder = tagFolder ?: return
-        if (running) return
-        running = true
-        logLines.clear()
-        activeTrackNames = null
-        tagPhase = Phase.Busy("Preparing…", 0, 0)
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { prepareTagPlan(folder) }
-            } catch (e: Exception) {
-                postTagPhase(Phase.Failed("Tagging failed: ${e.message ?: e}"))
-            } finally {
-                running = false
-            }
-        }
+        tagJob.start { prepareTagPlan(folder) }
     }
 
     private fun prepareTagPlan(folder: File) {
         val available = namedTracks()
         if (available.isEmpty()) {
-            postTagPhase(Phase.Failed("Select a GPS track first."))
+            tagJob.post(Phase.Failed("Select a GPS track first."))
             return
         }
 
@@ -636,7 +654,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         }?.sortedBy { it.name }.orEmpty()
 
         if (files.isEmpty()) {
-            postTagPhase(Phase.Failed("No taggable files in ${folder.name}."))
+            tagJob.post(Phase.Failed("No taggable files in ${folder.name}."))
             return
         }
 
@@ -645,7 +663,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         choice.lines().forEach(::log)
         postActiveTracks(choice.used.map { it.name }.toSet())
         if (choice.used.isEmpty()) {
-            postTagPhase(
+            tagJob.post(
                 Phase.Failed(
                     choice.lines().joinToString(" ").ifEmpty { "No track covers these photos." }
                 )
@@ -667,47 +685,20 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                 writer = if (fix == null) null else gpsWriter.effectiveWriterFor(file)?.name,
             )
         }
-        postTagPhase(Phase.Planned(ImportPlan(folder, folder, null, entries)))
+        tagJob.post(Phase.Planned(ImportPlan(folder, folder, null, entries)))
     }
 
-    fun confirmTagging() {
-        val planned = tagPhase as? Phase.Planned ?: return
-        if (running) return
-        running = true
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { executeTagPlan(planned.plan) }
-            } catch (e: Exception) {
-                postTagPhase(Phase.Failed("Tagging failed: ${e.message ?: e}"))
-            } finally {
-                running = false
-            }
-        }
-    }
+    fun confirmTagging() = tagJob.confirm(::executeTagPlan)
 
-    fun cancelTagging() {
-        if (!running) postTagPhase(Phase.Idle)
-    }
+    fun cancelTagging() = tagJob.cancel()
 
-    fun setTagSelected(source: File, selected: Boolean) {
-        val planned = tagPhase as? Phase.Planned ?: return
-        val plan = planned.plan
-        postTagPhase(
-            Phase.Planned(
-                plan.copy(
-                    entries = plan.entries.map {
-                        if (it.source == source) it.copy(selected = selected) else it
-                    }
-                )
-            )
-        )
-    }
+    fun setTagSelected(source: File, selected: Boolean) = tagJob.setSelected(source, selected)
 
     private fun executeTagPlan(plan: ImportPlan) {
         val app = getApplication<Application>()
         val targets = plan.selected
 
-        postTagPhase(Phase.Busy("Geotagging", 0, targets.size))
+        tagJob.post(Phase.Busy("Geotagging", 0, targets.size))
         var done = 0
         val counts = writeGeotags(
             // Tagging happens in place, so the file written is the file planned.
@@ -719,14 +710,14 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                 target.fix == null ->
                     log("No track point within tolerance for ${target.file.name} - not geotagged.")
             }
-            postTagPhase(Phase.Busy("Geotagging", ++done, targets.size))
+            tagJob.post(Phase.Busy("Geotagging", ++done, targets.size))
         }
 
         MediaScannerConnection.scanFile(
             app, targets.map { it.source.path }.toTypedArray(), null, null
         )
         log("Tagged ${counts.written} of ${targets.size} files.")
-        postTagPhase(
+        tagJob.post(
             Phase.Done(
                 ImportSummary(
                     destFolder = plan.destFolder.name,
@@ -739,10 +730,6 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                 )
             )
         )
-    }
-
-    private fun postTagPhase(next: Phase) {
-        viewModelScope.launch(Dispatchers.Main.immediate) { tagPhase = next }
     }
 
     /**
@@ -766,16 +753,6 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun log(message: String) {
         viewModelScope.launch(Dispatchers.Main.immediate) { logLines.add(message) }
-    }
-
-    private fun postPhase(next: Phase) {
-        viewModelScope.launch(Dispatchers.Main.immediate) { phase = next }
-    }
-
-    /** Logs [message] and moves the UI into the failed state. */
-    private fun fail(message: String) {
-        log(message)
-        postPhase(Phase.Failed(message))
     }
 
     private fun queryDisplayName(uri: Uri): String? =
