@@ -45,18 +45,17 @@ object TrackSelection {
             // Nothing to match, or nothing to match it against: either way the
             // caller has something better to report than the state of the tracks.
             if (total == 0 || photos == null) return emptyList()
-            val range = photos?.let { "${format(it.start, zone)} to ${format(it.endInclusive, zone)}" }
+            val range = "${format(photos.start, zone)} to ${format(photos.endInclusive, zone)}"
 
             if (used.isEmpty()) {
-                val nearest = photos?.let { p ->
-                    skipped.mapNotNull { named -> named.track.span?.let { named to it } }
-                        .minByOrNull { (_, span) -> distanceTo(span, p) }
-                }
+                val nearest = skipped
+                    .mapNotNull { named -> named.track.span?.let { named to it } }
+                    .minByOrNull { (_, span) -> distanceTo(span, photos) }
                 val subject =
                     if (total == 1) "The only track does not cover"
                     else "None of the $total tracks cover"
                 return listOfNotNull(
-                    "$subject these photos" + (range?.let { " ($it)" } ?: "") + ".",
+                    "$subject these photos ($range).",
                     nearest?.let { (named, span) ->
                         "Nearest is ${named.name}: " +
                             "${format(span.start, zone)} to ${format(span.endInclusive, zone)}. " +
