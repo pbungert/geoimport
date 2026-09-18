@@ -245,18 +245,22 @@ fun TrackMap(
                             join = const(LineJoin.Round),
                         )
                     }
-                    val last = track.points.last()
-                    val head = rememberGeoJsonSource(
-                        GeoJsonData.Features(Point(Position(last.lon, last.lat)))
-                    )
-                    CircleLayer(
-                        id = "track-head-${track.name}",
-                        source = head,
-                        color = const(color),
-                        radius = const(5.dp),
-                        strokeColor = const(Color.White),
-                        strokeWidth = const(2.dp),
-                    )
+                    // A track with no points has no head to mark. The view
+                    // model filters empty ones out today, which is not a
+                    // reason for a public composable to crash on one.
+                    track.points.lastOrNull()?.let { last ->
+                        val head = rememberGeoJsonSource(
+                            GeoJsonData.Features(Point(Position(last.lon, last.lat)))
+                        )
+                        CircleLayer(
+                            id = "track-head-${track.name}",
+                            source = head,
+                            color = const(color),
+                            radius = const(5.dp),
+                            strokeColor = const(Color.White),
+                            strokeWidth = const(2.dp),
+                        )
+                    }
                 }
             }
             myLocation?.let { position ->
