@@ -4,7 +4,6 @@ import com.pbungert.geoimport.core.model.TrackPoint
 import java.io.File
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.roundToLong
 
 /**
  * Writes the position to an XMP sidecar. The universal fallback: it works for
@@ -37,8 +36,10 @@ object XmpSidecarWriter : GpsWriter {
         append("    exif:GPSLatitude=\"${formatCoordinate(p.lat, 'N', 'S')}\"\n")
         append("    exif:GPSLongitude=\"${formatCoordinate(p.lon, 'E', 'W')}\"\n")
         p.ele?.let { ele ->
-            append("    exif:GPSAltitude=\"${(abs(ele) * 1000).roundToLong()}/1000\"\n")
-            append("    exif:GPSAltitudeRef=\"${if (ele < 0) 1 else 0}\"\n")
+            // Through ExifGpsFormat like every other backend, so a sidecar and
+            // an embedded tag for the same photo cannot round differently.
+            append("    exif:GPSAltitude=\"${ExifGpsFormat.altitudeRational(ele)}\"\n")
+            append("    exif:GPSAltitudeRef=\"${ExifGpsFormat.altitudeRef(ele)}\"\n")
         }
         append("  />\n")
         append(" </rdf:RDF>\n")
