@@ -18,6 +18,8 @@ import android.os.Environment
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
+import android.net.Uri
+import android.provider.DocumentsContract
 import com.pbungert.geoimport.MainActivity
 import com.pbungert.geoimport.core.model.TrackPoint
 import com.pbungert.geoimport.core.track.GpxWriter
@@ -389,8 +391,8 @@ class TrackRecorderService : Service() {
         private const val CHANNEL_ID = "track_recording"
         private const val NOTIFICATION_ID = 42
 
-        /** What a .gpx is, told to the media database so file managers list it. */
-        private const val GPX_MIME = "application/gpx+xml"
+        /** What a .gpx is: for the media database, and for a share. */
+        const val GPX_MIME = "application/gpx+xml"
         private const val PREFS = "recorder"
         private const val KEY_ACTIVE = "active"
         private const val KEY_PAUSED = "paused"
@@ -409,6 +411,22 @@ class TrackRecorderService : Service() {
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
             "GPS-Tracks",
         )
+
+        /**
+         * [tracksDir] as a document URI, for handing a file browser or a
+         * picker a place to open at. Null when the folder does not sit under
+         * external storage, which is the only shape this URI can describe.
+         */
+        fun tracksDirDocumentUri(): Uri? {
+            val relative = tracksDir()
+                .relativeToOrNull(Environment.getExternalStorageDirectory())
+                ?.path?.replace('\\', '/')
+                ?: return null
+            return DocumentsContract.buildDocumentUri(
+                "com.android.externalstorage.documents",
+                "primary:$relative",
+            )
+        }
 
         /** Today's date plus the first free counter, e.g. 2026-07-17_01. */
         fun defaultFileName(dir: File = tracksDir()): String {

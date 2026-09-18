@@ -205,9 +205,6 @@ fun GeoimportApp(viewModel: ImportViewModel = viewModel()) {
 }
 // --- Home ----------------------------------------------------------------
 
-/** What a .gpx is, for the media database and for a share. */
-private const val GPX_MIME = "application/gpx+xml"
-
 private val TRACK_DAY_FORMAT = DateTimeFormatter.ofPattern("d MMM")
 
 /** The drag handle above the sheet content, which the peek height has to clear. */
@@ -1205,15 +1202,7 @@ private fun PickFolderSheet(
  * to fall back to telling the user the path.
  */
 private fun openTracksFolder(context: Context): Boolean {
-    val dir = TrackRecorderService.tracksDir()
-    val relative = dir
-        .relativeToOrNull(Environment.getExternalStorageDirectory())
-        ?.path?.replace('\\', '/')
-        ?: return false
-    val folder = DocumentsContract.buildDocumentUri(
-        "com.android.externalstorage.documents",
-        "primary:$relative",
-    )
+    val folder = TrackRecorderService.tracksDirDocumentUri() ?: return false
     val view = Intent(Intent.ACTION_VIEW)
         .setDataAndType(folder, DocumentsContract.Document.MIME_TYPE_DIR)
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -1226,7 +1215,7 @@ private fun shareTrack(context: Context, file: File): Boolean = runCatching {
     context.startActivity(
         Intent.createChooser(
             Intent(Intent.ACTION_SEND)
-                .setType(GPX_MIME)
+                .setType(TrackRecorderService.GPX_MIME)
                 .putExtra(Intent.EXTRA_STREAM, uri)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
             "Share ${file.nameWithoutExtension}",
@@ -1248,7 +1237,9 @@ private fun scanTracksFolder(context: Context) {
         ?.toTypedArray()
         ?: return
     if (paths.isEmpty()) return
-    MediaScannerConnection.scanFile(context, paths, Array(paths.size) { GPX_MIME }, null)
+    MediaScannerConnection.scanFile(
+        context, paths, Array(paths.size) { TrackRecorderService.GPX_MIME }, null,
+    )
 }
 
 // --- The job screen ------------------------------------------------------
@@ -2071,18 +2062,10 @@ private class OpenTrackDocuments : ActivityResultContracts.OpenMultipleDocuments
         return intent
     }
 
+    /** Null when nothing is recorded there yet, so the picker opens where it would anyway. */
     private fun recordedTracksDirUri(): Uri? {
-        val dir = TrackRecorderService.tracksDir()
-        val hasTracks = dir.listFiles()
+        val hasTracks = TrackRecorderService.tracksDir().listFiles()
             ?.any { it.extension.equals("gpx", ignoreCase = true) } == true
-        if (!hasTracks) return null
-        val relative = dir
-            .relativeToOrNull(Environment.getExternalStorageDirectory())
-            ?.path?.replace('\\', '/')
-            ?: return null
-        return DocumentsContract.buildDocumentUri(
-            "com.android.externalstorage.documents",
-            "primary:$relative",
-        )
+        return if (hasTracks) TrackRecorderService.tracksDirDocumentUri() else null
     }
 }
