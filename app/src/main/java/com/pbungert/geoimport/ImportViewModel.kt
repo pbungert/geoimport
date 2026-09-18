@@ -249,21 +249,6 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         refreshTracks()
     }
 
-    fun clearPickedTracks() {
-        if (pickedUris.isEmpty()) return
-        val resolver = getApplication<Application>().contentResolver
-        pickedUris.forEach { uri ->
-            runCatching {
-                resolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-        }
-        pickedUris = emptyList()
-        writePickedUris()
-        refreshTracks()
-    }
-
-    val hasPickedTracks get() = pickedUris.isNotEmpty()
-
     /**
      * Parses one file out of the recording folder, or null when it holds
      * nothing usable.
