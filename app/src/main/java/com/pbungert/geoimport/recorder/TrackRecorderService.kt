@@ -54,8 +54,18 @@ class TrackRecorderService : Service() {
     private var requestingUpdates = false
     private var intervalMillis = DEFAULT_INTERVAL_MILLIS
 
+    /** Last GPS fix actually written, which is what lets fused stand down. */
     private var lastGpsFixRealtime = 0L
-    private var firstFixPending = true
+
+    /**
+     * When each provider last *delivered* anything, accepted or not. Kept per
+     * provider and updated on delivery rather than on acceptance, because what
+     * it answers is "has this provider been quiet long enough that its next fix
+     * is a re-acquisition?" - and a provider that is handing back rejects is
+     * not quiet. Zero means it has not spoken since updates were requested.
+     */
+    private var lastGpsDelivery = 0L
+    private var lastFusedDelivery = 0L
 
     // One listener per provider: LocationManager keys registrations by listener,
     // so sharing one would replace the first request instead of adding to it.
@@ -207,7 +217,8 @@ class TrackRecorderService : Service() {
             )
         }
 
-        firstFixPending = true
+        lastGpsDelivery = 0L
+        lastFusedDelivery = 0L
         requestingUpdates = true
     }
 
@@ -217,6 +228,8 @@ class TrackRecorderService : Service() {
         manager.removeUpdates(gpsListener)
         manager.removeUpdates(fusedListener)
         lastGpsFixRealtime = 0L
+        lastGpsDelivery = 0L
+        lastFusedDelivery = 0L
         requestingUpdates = false
     }
 
@@ -233,16 +246,34 @@ class TrackRecorderService : Service() {
     }
 
     /**
+     * A provider is re-acquiring when it has not been heard from in a while:
+     * either it has said nothing since updates were requested, or it dropped
+     * out and is only now coming back. Its next fix deserves the doubt that a
+     * steady stream of them does not.
+     */
+    private fun isReacquiring(fromGps: Boolean): Boolean {
+        val last = if (fromGps) lastGpsDelivery else lastFusedDelivery
+        if (last == 0L) return true
+        return SystemClock.elapsedRealtime() - last > maxOf(
+            intervalMillis * 3, MIN_REACQUIRE_SILENCE_MILLIS,
+        )
+    }
+
+    /**
      * GNSS degrades under a cliff but never invents a position kilometres away,
      * so it gets the loose bar; fused can hand back a cell-tower estimate, so it
-     * gets the strict one. The age check guards against a provider answering a
-     * fresh request with its last known position, which would mis-geotag photos;
-     * applied to every fix it would instead discard good coalesced deliveries.
+     * gets the strict one.
+     *
+     * The age check guards against a provider answering with its last known
+     * position, which looks perfectly good in the file and would silently
+     * mis-geotag photos. It applies whenever a provider is re-acquiring, which
+     * is when a cached position gets handed over; applied to every fix it would
+     * instead discard good coalesced deliveries.
      */
     private fun isUsable(location: Location, fromGps: Boolean): Boolean {
         val maxAccuracy = if (fromGps) MAX_GPS_ACCURACY_METERS else MAX_FUSED_ACCURACY_METERS
         if (!location.hasAccuracy() || location.accuracy > maxAccuracy) return false
-        if (firstFixPending &&
+        if (isReacquiring(fromGps) &&
             location.elapsedRealtimeAgeMillis > maxOf(intervalMillis, MIN_MAX_AGE_MILLIS)
         ) return false
         return true
@@ -257,8 +288,14 @@ class TrackRecorderService : Service() {
 
     private fun onFix(location: Location, fromGps: Boolean) {
         val w = writer ?: return
+        // Judged before the delivery is stamped, or the fix would be measured
+        // against its own arrival and no provider would ever be re-acquiring.
+        val usable = isUsable(location, fromGps)
+        val now = SystemClock.elapsedRealtime()
+        if (fromGps) lastGpsDelivery = now else lastFusedDelivery = now
+
         if (supersededByGps(fromGps)) return
-        if (!isUsable(location, fromGps)) {
+        if (!usable) {
             val s = state.value ?: return
             state.value = s.copy(droppedCount = s.droppedCount + 1)
             updateNotification()
@@ -273,8 +310,7 @@ class TrackRecorderService : Service() {
         } catch (_: Exception) {
             return
         }
-        if (fromGps) lastGpsFixRealtime = SystemClock.elapsedRealtime()
-        firstFixPending = false
+        if (fromGps) lastGpsFixRealtime = now
         val s = state.value ?: return
         state.value = s.copy(pointCount = s.pointCount + 1)
         updateNotification()
@@ -389,7 +425,10 @@ class TrackRecorderService : Service() {
         /** Floor on how long GNSS must be silent before a fused fix is written. */
         private const val MIN_FUSED_FALLBACK_MILLIS = 90_000L
 
-        /** Age cut-off for the first fix, when the interval is shorter. */
+        /** Floor on the silence that makes a provider's next fix a re-acquisition. */
+        private const val MIN_REACQUIRE_SILENCE_MILLIS = 90_000L
+
+        /** Age cut-off for a re-acquired fix, when the interval is shorter. */
         private const val MIN_MAX_AGE_MILLIS = 60_000L
 
         private const val CHANNEL_ID = "track_recording"
