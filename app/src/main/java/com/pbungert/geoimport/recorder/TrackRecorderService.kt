@@ -265,7 +265,11 @@ class TrackRecorderService : Service() {
             return
         }
         try {
-            w.addPoint(location.toTrackPoint())
+            w.addPoint(
+                location.toTrackPoint(
+                    if (fromGps) TrackPoint.SOURCE_GPS else TrackPoint.SOURCE_FUSED
+                )
+            )
         } catch (_: Exception) {
             return
         }
@@ -440,13 +444,21 @@ class TrackRecorderService : Service() {
 
 /**
  * Android fix to the portable track model. Altitude is the raw WGS-84
- * ellipsoidal height. Accuracy is persisted so a later track can be judged
- * from the file alone; speed and bearing are used for filtering only.
+ * ellipsoidal height.
+ *
+ * Everything the receiver says about its own fix is carried across, because
+ * this is the last point at which it exists: whatever is dropped here can
+ * never be recovered from the file. Bearing is the one reading left behind -
+ * a direction is only as good as the movement under it, and [speed] already
+ * says whether there was any.
  */
-private fun Location.toTrackPoint() = TrackPoint(
+private fun Location.toTrackPoint(source: String) = TrackPoint(
     time = Instant.ofEpochMilli(time),
     lat = latitude,
     lon = longitude,
     ele = if (hasAltitude()) altitude else null,
     accuracy = if (hasAccuracy()) accuracy.toDouble() else null,
+    eleAccuracy = if (hasVerticalAccuracy()) verticalAccuracyMeters.toDouble() else null,
+    speed = if (hasSpeed()) speed.toDouble() else null,
+    source = source,
 )
