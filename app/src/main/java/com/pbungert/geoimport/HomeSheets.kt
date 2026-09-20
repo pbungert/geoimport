@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FiberManualRecord
@@ -30,6 +32,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextFieldLabelPosition
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -67,7 +70,7 @@ internal fun RecordSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val defaultName = remember { TrackRecorderService.defaultFileName() }
-    var name by rememberSaveable { mutableStateOf("") }
+    val name = rememberTextFieldState()
     var interval by rememberSaveable { mutableStateOf(viewModel.recordIntervalMinutes) }
     var custom by rememberSaveable {
         mutableStateOf(INTERVAL_PRESETS.none { it.second == interval.trim().replace(',', '.') })
@@ -95,11 +98,11 @@ internal fun RecordSheet(
             }
 
             OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
+                state = name,
                 label = { Text("Name") },
+                labelPosition = TextFieldLabelPosition.Above(),
                 placeholder = { Text(defaultName) },
-                singleLine = true,
+                lineLimits = TextFieldLineLimits.SingleLine,
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -152,7 +155,7 @@ internal fun RecordSheet(
                 onClick = {
                     val chosen = minutes ?: return@Button
                     viewModel.recordIntervalMinutes = interval.trim().replace(',', '.')
-                    onStart(name, chosen)
+                    onStart(name.text.toString(), chosen)
                 },
                 enabled = minutes != null && minutes > 0,
                 modifier = Modifier.fillMaxWidth().height(56.dp),
