@@ -260,19 +260,20 @@ class TrackRecorderService : Service() {
     }
 
     /**
-     * GNSS degrades under a cliff but never invents a position kilometres away,
-     * so it gets the loose bar; fused can hand back a cell-tower estimate, so it
-     * gets the strict one.
+     * Rejection is forever - the fix is gone from the file and no later pass
+     * can second-guess it - so this bar only catches what is absurd on its
+     * face, and everything merely imprecise is written with its own accuracy
+     * beside it for a reader to weigh.
      *
-     * The age check guards against a provider answering with its last known
-     * position, which looks perfectly good in the file and would silently
-     * mis-geotag photos. It applies whenever a provider is re-acquiring, which
-     * is when a cached position gets handed over; applied to every fix it would
-     * instead discard good coalesced deliveries.
+     * The one judgement that cannot be deferred is staleness: a provider
+     * answering with its last known position looks perfectly good in the file
+     * and would silently mis-geotag photos, and the age that gives it away
+     * exists only here, on the live [Location]. It is checked when a provider
+     * is re-acquiring, which is when a cached position gets handed over;
+     * applied to every fix it would instead discard good coalesced deliveries.
      */
     private fun isUsable(location: Location, fromGps: Boolean): Boolean {
-        val maxAccuracy = if (fromGps) MAX_GPS_ACCURACY_METERS else MAX_FUSED_ACCURACY_METERS
-        if (!location.hasAccuracy() || location.accuracy > maxAccuracy) return false
+        if (!location.hasAccuracy() || location.accuracy > MAX_ACCURACY_METERS) return false
         if (isReacquiring(fromGps) &&
             location.elapsedRealtimeAgeMillis > maxOf(intervalMillis, MIN_MAX_AGE_MILLIS)
         ) return false
@@ -416,11 +417,14 @@ class TrackRecorderService : Service() {
         const val DEFAULT_INTERVAL_MINUTES = 1.0
         const val DEFAULT_INTERVAL_MILLIS = (DEFAULT_INTERVAL_MINUTES * 60_000).toLong()
 
-        /** Above a wifi fix (~15-40 m), far below a cell-tower one (500 m up). */
-        private const val MAX_FUSED_ACCURACY_METERS = 50f
-
-        /** Loose: a real fix in a steep valley reaches this without being wrong. */
-        private const val MAX_GPS_ACCURACY_METERS = 100f
+        /**
+         * A safety bar, not a quality bar: above this a fix is not a degraded
+         * position but a different kind of answer altogether - a cell-tower
+         * estimate rather than a fix. Anything under it is written and left for
+         * a later pass to weigh, because that pass can see what came next and
+         * this code cannot.
+         */
+        private const val MAX_ACCURACY_METERS = 200f
 
         /** Floor on how long GNSS must be silent before a fused fix is written. */
         private const val MIN_FUSED_FALLBACK_MILLIS = 90_000L
