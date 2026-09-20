@@ -40,16 +40,20 @@ class GpxWriter(val file: File, trackName: String) {
         )
         point.ele?.let { sb.append(String.format(Locale.US, "    <ele>%.1f</ele>\n", it)) }
         sb.append("    <time>").append(point.time).append("</time>\n")
-        // Metres, so not GPX's dimensionless <hdop>. Kept in an
-        // extension rather than fudged into the standard element; readers that
-        // do not know the namespace skip <extensions>.
-        point.accuracy?.let {
-            sb.append(
-                String.format(
-                    Locale.US,
-                    "    <extensions><geoimport:acc>%.1f</geoimport:acc></extensions>\n", it,
-                )
-            )
+        // What the receiver said about its own fix, so a later pass can judge
+        // the track from the file alone. Metres, so not GPX's dimensionless
+        // <hdop>. Kept in an extension rather than fudged into the standard
+        // elements - <speed> in particular means something else in GPX 1.0 -
+        // and readers that do not know the namespace skip <extensions> whole.
+        val ext = StringBuilder()
+        point.accuracy?.let { ext.append(fmt("acc", "%.1f", it)) }
+        point.eleAccuracy?.let { ext.append(fmt("eleacc", "%.1f", it)) }
+        point.speed?.let { ext.append(fmt("speed", "%.2f", it)) }
+        point.source?.let {
+            ext.append("<geoimport:src>").append(escapeXml(it)).append("</geoimport:src>")
+        }
+        if (ext.isNotEmpty()) {
+            sb.append("    <extensions>").append(ext).append("</extensions>\n")
         }
         sb.append("   </trkpt>\n")
         val bytes = sb.toString().toByteArray(StandardCharsets.UTF_8)
@@ -75,6 +79,10 @@ class GpxWriter(val file: File, trackName: String) {
     }
 
     fun close() = raf.close()
+
+    private fun fmt(name: String, format: String, value: Double) = String.format(
+        Locale.US, "<geoimport:%s>$format</geoimport:%s>", name, value, name,
+    )
 
     private fun escapeXml(s: String) =
         s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

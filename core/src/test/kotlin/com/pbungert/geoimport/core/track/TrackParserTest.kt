@@ -300,4 +300,96 @@ class TrackParserTest {
         assertEquals(-33.8688, read[2].lat, 1e-7)
         assertEquals(-5.0, read[2].ele!!, 1e-9)
     }
+
+    @Test
+    fun roundTripsTheWholeEvidenceBlock() {
+        val file = tmp.newFile("evidence.gpx")
+        file.delete()
+        val point = TrackPoint(
+            time = Instant.parse("2026-09-18T16:41:43Z"),
+            lat = 46.9524553, lon = 7.4186012, ele = 888.0,
+            accuracy = 17.9, eleAccuracy = 61.5, speed = 1.37,
+            source = TrackPoint.SOURCE_GPS,
+        )
+        val writer = GpxWriter(file, "evidence")
+        writer.addPoint(point)
+        writer.close()
+
+        // Pinned literally: this is a file format other tools read, and the
+        // one namespace prefix is what keeps <speed> from colliding with GPX's.
+        assertTrue(
+            file.readText().contains(
+                "<extensions>" +
+                    "<geoimport:acc>17.9</geoimport:acc>" +
+                    "<geoimport:eleacc>61.5</geoimport:eleacc>" +
+                    "<geoimport:speed>1.37</geoimport:speed>" +
+                    "<geoimport:src>gps</geoimport:src>" +
+                    "</extensions>"
+            )
+        )
+
+        val read = TrackParser.parse(file.inputStream(), ZoneId.of("UTC")).points.single()
+        assertEquals(17.9, read.accuracy!!, 0.05)
+        assertEquals(61.5, read.eleAccuracy!!, 0.05)
+        assertEquals(1.37, read.speed!!, 0.005)
+        assertEquals(TrackPoint.SOURCE_GPS, read.source)
+    }
+
+    @Test
+    fun omitsTheExtensionsBlockWhenThereIsNoEvidence() {
+        val file = tmp.newFile("bare.gpx")
+        file.delete()
+        val writer = GpxWriter(file, "bare")
+        writer.addPoint(TrackPoint(Instant.parse("2026-09-18T16:41:43Z"), 46.95, 7.41, 550.0))
+        writer.close()
+        assertTrue(!file.readText().contains("extensions"))
+    }
+
+    /**
+     * The evidence fields are enrichment, never a requirement: a track exported
+     * by any other app carries none of them and still has to parse, with the
+     * absence readable as absence rather than as a zero.
+     */
+    @Test
+    fun leavesEvidenceNullForAForeignFile() {
+        val points = parse(
+            """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+             <trk><trkseg>
+              <trkpt lat="1.0" lon="2.0">
+               <ele>10.0</ele><time>2026-01-01T00:00:00Z</time>
+              </trkpt>
+             </trkseg></trk>
+            </gpx>
+            """
+        )
+        val p = points.single()
+        assertEquals(null, p.accuracy)
+        assertEquals(null, p.eleAccuracy)
+        assertEquals(null, p.speed)
+        assertEquals(null, p.source)
+    }
+
+    /**
+     * <speed> is a standard GPX 1.0 element on a trkpt and means the same thing
+     * ours does, but a foreign file's is not a reading this recorder vouches
+     * for. Only the namespace tells them apart.
+     */
+    @Test
+    fun ignoresAForeignSpeedElementOutsideTheExtensionNamespace() {
+        val points = parse(
+            """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <gpx version="1.0" xmlns="http://www.topografix.com/GPX/1/1">
+             <trk><trkseg>
+              <trkpt lat="1.0" lon="2.0">
+               <time>2026-01-01T00:00:00Z</time><speed>4.5</speed>
+              </trkpt>
+             </trkseg></trk>
+            </gpx>
+            """
+        )
+        assertEquals(null, points.single().speed)
+    }
 }

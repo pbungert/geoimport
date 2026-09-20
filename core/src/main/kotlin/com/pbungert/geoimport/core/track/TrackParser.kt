@@ -141,6 +141,9 @@ object TrackParser {
         private var ele: Double? = null
         private var time: Instant? = null
         private var accuracy: Double? = null
+        private var eleAccuracy: Double? = null
+        private var speed: Double? = null
+        private var source: String? = null
 
         // KML state
         private val whens = mutableListOf<Instant?>()
@@ -182,6 +185,9 @@ object TrackParser {
                             ele = null
                             time = null
                             accuracy = null
+                            eleAccuracy = null
+                            speed = null
+                            source = null
                         }
                     }
                 }
@@ -209,11 +215,29 @@ object TrackParser {
                 when (localName) {
                     "ele" -> if (inPoint) ele = body.trim().toDoubleOrNull()
                     "time" -> if (inPoint) time = parseTime(body)
+                    // Namespace-guarded, and not only for tidiness: <speed> is
+                    // a standard GPX 1.0 element on a trkpt, and only the
+                    // namespace separates a recorder's reading from that one.
                     "acc" -> if (inPoint && uri == GpxWriter.NS) {
                         accuracy = body.trim().toDoubleOrNull()
                     }
+                    "eleacc" -> if (inPoint && uri == GpxWriter.NS) {
+                        eleAccuracy = body.trim().toDoubleOrNull()
+                    }
+                    "speed" -> if (inPoint && uri == GpxWriter.NS) {
+                        speed = body.trim().toDoubleOrNull()
+                    }
+                    "src" -> if (inPoint && uri == GpxWriter.NS) {
+                        source = body.trim().ifEmpty { null }
+                    }
                     "trkpt", "rtept", "wpt" -> if (inPoint) {
-                        time?.let { current.add(TrackPoint(it, lat, lon, ele, accuracy)) }
+                        time?.let {
+                            current.add(
+                                TrackPoint(
+                                    it, lat, lon, ele, accuracy, eleAccuracy, speed, source,
+                                )
+                            )
+                        }
                         inPoint = false
                     }
                     "trkseg", "rte" -> endSegment()
