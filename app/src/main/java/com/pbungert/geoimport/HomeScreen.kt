@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
@@ -75,6 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pbungert.geoimport.core.model.distanceMeters
+import com.pbungert.geoimport.core.track.TrackCleanup
 import com.pbungert.geoimport.recorder.RecordingState
 import com.pbungert.geoimport.recorder.TrackRecorderService
 import com.pbungert.geoimport.ui.map.DisplayTrack
@@ -113,6 +115,7 @@ internal fun HomeScreen(
     var peekContentHeight by remember { mutableStateOf(160.dp) }
     var showRecordSheet by rememberSaveable { mutableStateOf(false) }
     var showPlaceSheet by rememberSaveable { mutableStateOf(false) }
+    var compareCleanup by rememberSaveable { mutableStateOf(false) }
 
     // One source for the tracks, the view model's, so the list here and the
     // list in the import settings cannot drift apart. A finished import is what
@@ -139,8 +142,23 @@ internal fun HomeScreen(
     val ordered = orderedTracks(viewModel)
     val selected = viewModel.selectedTrackNames
     // Nothing chosen shows the newest track, which is what you just recorded.
-    val shown = (if (selected.isEmpty()) ordered.take(1) else ordered.filter { it.name in selected })
-        .map { DisplayTrack(it.name, it.track) }
+    val picked = if (selected.isEmpty()) ordered.take(1) else ordered.filter { it.name in selected }
+    // Cleaning walks every point, so it is done once per set of tracks rather
+    // than on each recomposition - and only when there is something to show.
+    val cleaned = remember(picked.map { it.name }, picked.sumOf { it.track.size }, compareCleanup) {
+        if (!compareCleanup) emptyMap()
+        else picked.associate { it.name to TrackCleanup.clean(it.track) }
+    }
+    val shown = picked.map { loaded ->
+        val result = cleaned[loaded.name]
+        if (result == null) DisplayTrack(loaded.name, loaded.track)
+        else DisplayTrack(
+            name = loaded.name,
+            track = result.track,
+            underlay = loaded.track,
+            marks = result.removedPoints,
+        )
+    }
     val liveTrack = recording?.let { rec ->
         ordered.firstOrNull { it.name == rec.fileName.substringBeforeLast('.') }
     }
@@ -313,6 +331,37 @@ internal fun HomeScreen(
                         )
                     }
                 }
+                // What the grey line underneath means, and what it cost. The
+                // count is the reason to trust the picture: a shape you can
+                // see changed and a number saying how much.
+                if (compareCleanup && cleaned.isNotEmpty()) {
+                    val removed = cleaned.values.sumOf { it.removedCount }
+                    val altitudes = cleaned.values.sumOf {
+                        it.count(TrackCleanup.Finding.ELEVATION_UNTRUSTED) +
+                            it.count(TrackCleanup.Finding.ELEVATION_EXCURSION)
+                    }
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .statusBarsPadding()
+                            .padding(16.dp)
+                            // Stops short of the overflow button in the same
+                            // row, which the text would otherwise run under.
+                            .padding(end = 56.dp),
+                    ) {
+                        Text(
+                            "Grey is the raw track — " +
+                                "$removed fix" + (if (removed == 1) "" else "es") + " removed" +
+                                if (altitudes > 0) ", $altitudes altitude" +
+                                    (if (altitudes == 1) "" else "s") + " dropped" else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
             }
 
             // Nothing floats over the map but the menu. What is drawn is named
@@ -327,6 +376,8 @@ internal fun HomeScreen(
                 HomeOverflow(
                     onShowLog = onShowLog,
                     onPlaceExisting = { showPlaceSheet = true },
+                    compareCleanup = compareCleanup,
+                    onToggleCleanup = { compareCleanup = !compareCleanup },
                 )
             }
         }
@@ -366,7 +417,12 @@ private fun describeLastImport(folders: List<File>): String? {
 }
 
 @Composable
-private fun HomeOverflow(onShowLog: () -> Unit, onPlaceExisting: () -> Unit) {
+private fun HomeOverflow(
+    onShowLog: () -> Unit,
+    onPlaceExisting: () -> Unit,
+    compareCleanup: Boolean,
+    onToggleCleanup: () -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
 
     Box {
@@ -381,6 +437,13 @@ private fun HomeOverflow(onShowLog: () -> Unit, onPlaceExisting: () -> Unit) {
             }
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text(if (compareCleanup) "Hide cleanup" else "Compare with cleanup") },
+                leadingIcon = {
+                    if (compareCleanup) Icon(Icons.Filled.Check, contentDescription = null)
+                },
+                onClick = { expanded = false; onToggleCleanup() },
+            )
             DropdownMenuItem(
                 text = { Text("Place photos already here") },
                 onClick = { expanded = false; onPlaceExisting() },

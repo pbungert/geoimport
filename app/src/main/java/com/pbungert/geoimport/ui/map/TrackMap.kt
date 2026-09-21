@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.pbungert.geoimport.core.model.Track
+import com.pbungert.geoimport.core.model.TrackPoint
 import kotlinx.coroutines.launch
 import org.maplibre.compose.camera.CameraPosition
 import org.maplibre.compose.camera.rememberCameraState
@@ -62,6 +63,7 @@ import org.maplibre.compose.style.BaseStyle
 import org.maplibre.compose.style.rememberStyleState
 import org.maplibre.spatialk.geojson.BoundingBox
 import org.maplibre.spatialk.geojson.MultiLineString
+import org.maplibre.spatialk.geojson.MultiPoint
 import org.maplibre.spatialk.geojson.Point
 import org.maplibre.spatialk.geojson.Position
 
@@ -69,9 +71,23 @@ import org.maplibre.spatialk.geojson.Position
  * A named track ready to be drawn on a map. Segments are drawn as separate
  * lines, so a pause or a gap between two merged recordings shows up as the
  * break it is rather than a straight line across it.
+ *
+ * [underlay] and [marks] exist to show what a pass over the track changed:
+ * the before-version is drawn faintly underneath and the fixes it lost are
+ * ringed, so the difference is visible instead of having to be trusted.
  */
-data class DisplayTrack(val name: String, val track: Track) {
+data class DisplayTrack(
+    val name: String,
+    val track: Track,
+    /** Drawn faint and beneath [track]. Null when there is nothing to compare. */
+    val underlay: Track? = null,
+    /** Individual fixes to ring, typically the ones [track] no longer has. */
+    val marks: List<TrackPoint> = emptyList(),
+) {
     val points get() = track.points
+
+    /** Everything the camera has to fit, which includes what was removed. */
+    val framedPoints get() = if (underlay == null) points else underlay.points
 }
 
 private const val STYLE_URI = "https://tiles.openfreemap.org/styles/liberty"
@@ -83,6 +99,12 @@ private val TRACK_COLORS = listOf(
 
 /** Blue dot marking the device's own position, the usual map convention. */
 private val MY_LOCATION_COLOR = Color(0xFF1A73E8)
+
+/** The before-version of a track: present, clearly behind, not competing. */
+private val UNDERLAY_COLOR = Color(0xFF9E9E9E)
+
+/** Rings a fix that was taken out, in the colour of a correction. */
+private val MARK_COLOR = Color(0xFFD32F2F)
 
 private val LOCATION_PERMISSIONS = arrayOf(
     Manifest.permission.ACCESS_FINE_LOCATION,
@@ -180,7 +202,7 @@ fun TrackMap(
         )
     }
 
-    val pointCount = tracks.sumOf { it.points.size }
+    val pointCount = tracks.sumOf { it.framedPoints.size }
     // Names as well as the count: switching between two track sets of the same
     // size is a different view and has to refit.
     val trackNames = tracks.map { it.name }
@@ -191,7 +213,7 @@ fun TrackMap(
     LaunchedEffect(pointCount, trackNames, fitPadding) {
         val pickedOtherTracks = trackNames != framedNames
         if (followingMyLocation && !pickedOtherTracks) return@LaunchedEffect
-        val points = tracks.flatMap { it.points }
+        val points = tracks.flatMap { it.framedPoints }
         if (points.isEmpty()) return@LaunchedEffect
         // Only once there is something to frame, so an empty selection leaves
         // the camera where it was and the next real one still counts as new.
@@ -230,6 +252,26 @@ fun TrackMap(
             tracks.forEachIndexed { index, track ->
                 key(track.name) {
                     val color = TRACK_COLORS[index % TRACK_COLORS.size]
+                    // Laid down first so the cleaned line covers it: what shows
+                    // through is exactly what cleaning took away.
+                    track.underlay?.let { before ->
+                        val drawnBefore = before.segments
+                            .filter { it.size >= 2 }
+                            .map { segment -> segment.map { Position(it.lon, it.lat) } }
+                        if (drawnBefore.isNotEmpty()) {
+                            val beforeLine = rememberGeoJsonSource(
+                                GeoJsonData.Features(MultiLineString(drawnBefore))
+                            )
+                            LineLayer(
+                                id = "track-before-${track.name}",
+                                source = beforeLine,
+                                color = const(UNDERLAY_COLOR),
+                                width = const(5.dp),
+                                cap = const(LineCap.Round),
+                                join = const(LineJoin.Round),
+                            )
+                        }
+                    }
                     // A one-point segment has no line to draw, and MultiLineString
                     // rejects it outright.
                     val drawn = track.track.segments
@@ -269,6 +311,21 @@ fun TrackMap(
                             color = const(color),
                             radius = const(5.dp),
                             strokeColor = const(Color.White),
+                            strokeWidth = const(2.dp),
+                        )
+                    }
+                    if (track.marks.isNotEmpty()) {
+                        val marked = rememberGeoJsonSource(
+                            GeoJsonData.Features(
+                                MultiPoint(track.marks.map { Position(it.lon, it.lat) })
+                            )
+                        )
+                        CircleLayer(
+                            id = "track-marks-${track.name}",
+                            source = marked,
+                            color = const(MARK_COLOR.copy(alpha = 0.25f)),
+                            radius = const(7.dp),
+                            strokeColor = const(MARK_COLOR),
                             strokeWidth = const(2.dp),
                         )
                     }
