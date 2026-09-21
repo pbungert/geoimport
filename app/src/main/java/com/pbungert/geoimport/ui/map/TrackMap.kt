@@ -43,6 +43,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.pbungert.geoimport.core.model.Track
 import com.pbungert.geoimport.core.model.TrackPoint
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
 import org.maplibre.compose.camera.CameraPosition
 import org.maplibre.compose.camera.rememberCameraState
 import org.maplibre.compose.expressions.dsl.const
@@ -61,11 +62,14 @@ import org.maplibre.compose.sources.GeoJsonData
 import org.maplibre.compose.sources.rememberGeoJsonSource
 import org.maplibre.compose.style.BaseStyle
 import org.maplibre.compose.style.rememberStyleState
+import org.maplibre.compose.util.ClickResult
 import org.maplibre.spatialk.geojson.BoundingBox
+import org.maplibre.spatialk.geojson.Feature
+import org.maplibre.spatialk.geojson.FeatureCollection
 import org.maplibre.spatialk.geojson.MultiLineString
-import org.maplibre.spatialk.geojson.MultiPoint
 import org.maplibre.spatialk.geojson.Point
 import org.maplibre.spatialk.geojson.Position
+import kotlin.math.abs
 
 /**
  * A named track ready to be drawn on a map. Segments are drawn as separate
@@ -74,7 +78,9 @@ import org.maplibre.spatialk.geojson.Position
  *
  * [underlay] and [marks] exist to show what a pass over the track changed:
  * the before-version is drawn faintly underneath and the fixes it lost are
- * ringed, so the difference is visible instead of having to be trusted.
+ * ringed, so the difference is visible instead of having to be trusted. Both
+ * are tappable - see `onMarkClick` and `onUnderlayClick` on [TrackMap] - which
+ * is where the explanation lives, rather than in a banner nobody asked for.
  */
 data class DisplayTrack(
     val name: String,
@@ -88,7 +94,21 @@ data class DisplayTrack(
 
     /** Everything the camera has to fit, which includes what was removed. */
     val framedPoints get() = if (underlay == null) points else underlay.points
+
+    /**
+     * The mark a tapped feature stands for, or null if the tap landed on none
+     * of them. Matched on position rather than by identity: the feature has
+     * been out to the map through GeoJSON and back, and its coordinates are
+     * the only part of it that made the round trip.
+     */
+    internal fun markAt(point: Point): TrackPoint? = marks.firstOrNull {
+        abs(it.lat - point.latitude) < MARK_MATCH_DEGREES &&
+            abs(it.lon - point.longitude) < MARK_MATCH_DEGREES
+    }
 }
+
+/** About a metre, far below the distance between two separate spikes. */
+private const val MARK_MATCH_DEGREES = 1e-5
 
 private const val STYLE_URI = "https://tiles.openfreemap.org/styles/liberty"
 
@@ -105,6 +125,22 @@ private val UNDERLAY_COLOR = Color(0xFF9E9E9E)
 
 /** Rings a fix that was taken out, in the colour of a correction. */
 private val MARK_COLOR = Color(0xFFD32F2F)
+
+/**
+ * What a tap actually aims at, as opposed to what is drawn. Short of the 48dp
+ * Android asks for - a track doubles back on itself and two parts of the same
+ * line would start fighting over the same tap - but wide enough for a thumb.
+ */
+private val TOUCH_WIDTH = 28.dp
+private val TOUCH_RADIUS = 16.dp
+
+/**
+ * Not [Color.Transparent], which is the whole point: the map hit-tests what it
+ * has drawn, and a layer at zero alpha is drawn nowhere and hits nothing. At
+ * this alpha it is present to the renderer and invisible to the eye - a 5dp
+ * grey line under a 28dp veil of itself looks exactly like a 5dp grey line.
+ */
+private const val TOUCH_ALPHA = 0.01f
 
 private val LOCATION_PERMISSIONS = arrayOf(
     Manifest.permission.ACCESS_FINE_LOCATION,
@@ -135,6 +171,10 @@ fun TrackMap(
     modifier: Modifier = Modifier,
     onExpand: (() -> Unit)? = null,
     contentPadding: PaddingValues = PaddingValues(0.dp),
+    /** A ringed fix from [DisplayTrack.marks] was tapped. */
+    onMarkClick: ((TrackPoint) -> Unit)? = null,
+    /** The faint [DisplayTrack.underlay] line was tapped, away from any mark. */
+    onUnderlayClick: (() -> Unit)? = null,
 ) {
     val cameraState = rememberCameraState()
     val styleState = rememberStyleState()
@@ -270,6 +310,20 @@ fun TrackMap(
                                 cap = const(LineCap.Round),
                                 join = const(LineJoin.Round),
                             )
+                            // A 5dp line is a five-pixel target: findable by
+                            // eye, unhittable by thumb. The tap goes to a
+                            // wider near-invisible line laid over the top.
+                            onUnderlayClick?.let { notify ->
+                                LineLayer(
+                                    id = "track-before-touch-${track.name}",
+                                    source = beforeLine,
+                                    color = const(UNDERLAY_COLOR.copy(alpha = TOUCH_ALPHA)),
+                                    width = const(TOUCH_WIDTH),
+                                    cap = const(LineCap.Round),
+                                    join = const(LineJoin.Round),
+                                    onClick = { notify(); ClickResult.Consume },
+                                )
+                            }
                         }
                     }
                     // A one-point segment has no line to draw, and MultiLineString
@@ -315,9 +369,19 @@ fun TrackMap(
                         )
                     }
                     if (track.marks.isNotEmpty()) {
+                        // One feature per mark rather than a single MultiPoint,
+                        // so a tap comes back as the one position that was hit
+                        // instead of the whole set at once.
                         val marked = rememberGeoJsonSource(
                             GeoJsonData.Features(
-                                MultiPoint(track.marks.map { Position(it.lon, it.lat) })
+                                FeatureCollection(
+                                    track.marks.map {
+                                        Feature(
+                                            Point(Position(it.lon, it.lat)),
+                                            JsonObject(emptyMap()),
+                                        )
+                                    }
+                                )
                             )
                         )
                         CircleLayer(
@@ -328,6 +392,30 @@ fun TrackMap(
                             strokeColor = const(MARK_COLOR),
                             strokeWidth = const(2.dp),
                         )
+                        // As with the line: what you aim at is bigger than
+                        // what you see, and sits above everything so a ring
+                        // wins the tap over the raw line running under it.
+                        onMarkClick?.let { notify ->
+                            CircleLayer(
+                                id = "track-marks-touch-${track.name}",
+                                source = marked,
+                                color = const(MARK_COLOR.copy(alpha = TOUCH_ALPHA)),
+                                radius = const(TOUCH_RADIUS),
+                                onClick = { features ->
+                                    val hit = features
+                                        .asSequence()
+                                        .mapNotNull { it.geometry as? Point }
+                                        .mapNotNull { track.markAt(it) }
+                                        .firstOrNull()
+                                    if (hit == null) {
+                                        ClickResult.Pass
+                                    } else {
+                                        notify(hit)
+                                        ClickResult.Consume
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }

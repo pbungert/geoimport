@@ -75,6 +75,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.pbungert.geoimport.core.model.TrackPoint
 import com.pbungert.geoimport.core.model.distanceMeters
 import com.pbungert.geoimport.core.track.TrackCleanup
 import com.pbungert.geoimport.recorder.RecordingState
@@ -115,7 +116,11 @@ internal fun HomeScreen(
     var peekContentHeight by remember { mutableStateOf(160.dp) }
     var showRecordSheet by rememberSaveable { mutableStateOf(false) }
     var showPlaceSheet by rememberSaveable { mutableStateOf(false) }
-    var compareCleanup by rememberSaveable { mutableStateOf(false) }
+    // The cleaned track is the track. The raw one is evidence, shown on demand
+    // by someone asking what the cleanup did - so it is off, and says nothing
+    // until it is tapped.
+    var showRaw by rememberSaveable { mutableStateOf(false) }
+    var explanation by remember { mutableStateOf<String?>(null) }
 
     // One source for the tracks, the view model's, so the list here and the
     // list in the import settings cannot drift apart. A finished import is what
@@ -144,20 +149,26 @@ internal fun HomeScreen(
     // Nothing chosen shows the newest track, which is what you just recorded.
     val picked = if (selected.isEmpty()) ordered.take(1) else ordered.filter { it.name in selected }
     // Cleaning walks every point, so it is done once per set of tracks rather
-    // than on each recomposition - and only when there is something to show.
-    val cleaned = remember(picked.map { it.name }, picked.sumOf { it.track.size }, compareCleanup) {
-        if (!compareCleanup) emptyMap()
-        else picked.associate { it.name to TrackCleanup.clean(it.track) }
+    // than on each recomposition. It runs whether or not the raw track is on
+    // show, because its result is what gets drawn either way.
+    val cleaned = remember(picked.map { it.name }, picked.sumOf { it.track.size }) {
+        picked.associate { it.name to TrackCleanup.clean(it.track) }
     }
     val shown = picked.map { loaded ->
         val result = cleaned[loaded.name]
-        if (result == null) DisplayTrack(loaded.name, loaded.track)
-        else DisplayTrack(
+        DisplayTrack(
             name = loaded.name,
-            track = result.track,
-            underlay = loaded.track,
-            marks = result.removedPoints,
+            track = result?.track ?: loaded.track,
+            underlay = if (showRaw) loaded.track else null,
+            marks = if (showRaw) result?.removedPoints.orEmpty() else emptyList(),
         )
+    }
+    val noteFor = { point: TrackPoint ->
+        cleaned.values.firstNotNullOfOrNull { result ->
+            result.notes.firstOrNull {
+                it.finding == TrackCleanup.Finding.POSITION_EXCURSION && it.point == point
+            }
+        }
     }
     val liveTrack = recording?.let { rec ->
         ordered.firstOrNull { it.name == rec.fileName.substringBeforeLast('.') }
@@ -315,6 +326,29 @@ internal fun HomeScreen(
                     shown,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = inner,
+                    onMarkClick = { point ->
+                        val note = noteFor(point)
+                        explanation = if (note == null) {
+                            "This fix was removed from the track."
+                        } else {
+                            "Removed at " +
+                                note.time.atZone(zone).toLocalTime().withNano(0) +
+                                " — ${note.detail}. A step that far out and " +
+                                "straight back is not a route anybody took."
+                        }
+                    },
+                    onUnderlayClick = {
+                        val removed = cleaned.values.sumOf { it.removedCount }
+                        val altitudes = cleaned.values.sumOf {
+                            it.count(TrackCleanup.Finding.ELEVATION_UNTRUSTED) +
+                                it.count(TrackCleanup.Finding.ELEVATION_EXCURSION)
+                        }
+                        explanation = "Grey is the track as recorded. " +
+                            "$removed fix" + (if (removed == 1) "" else "es") + " removed" +
+                            (if (altitudes > 0) ", $altitudes altitude" +
+                                (if (altitudes == 1) "" else "s") + " dropped" else "") +
+                            ". Tap a red ring to see why that one went."
+                    },
                 )
                 if (shown.isEmpty()) {
                     Surface(
@@ -331,15 +365,10 @@ internal fun HomeScreen(
                         )
                     }
                 }
-                // What the grey line underneath means, and what it cost. The
-                // count is the reason to trust the picture: a shape you can
-                // see changed and a number saying how much.
-                if (compareCleanup && cleaned.isNotEmpty()) {
-                    val removed = cleaned.values.sumOf { it.removedCount }
-                    val altitudes = cleaned.values.sumOf {
-                        it.count(TrackCleanup.Finding.ELEVATION_UNTRUSTED) +
-                            it.count(TrackCleanup.Finding.ELEVATION_EXCURSION)
-                    }
+                // Only ever here because something on the map was tapped, and
+                // gone again on the next tap: an answer to a question, not a
+                // caption sitting over a view that reads fine without one.
+                explanation?.let { text ->
                     Surface(
                         shape = MaterialTheme.shapes.small,
                         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -349,13 +378,11 @@ internal fun HomeScreen(
                             .padding(16.dp)
                             // Stops short of the overflow button in the same
                             // row, which the text would otherwise run under.
-                            .padding(end = 56.dp),
+                            .padding(end = 56.dp)
+                            .clickable { explanation = null },
                     ) {
                         Text(
-                            "Grey is the raw track — " +
-                                "$removed fix" + (if (removed == 1) "" else "es") + " removed" +
-                                if (altitudes > 0) ", $altitudes altitude" +
-                                    (if (altitudes == 1) "" else "s") + " dropped" else "",
+                            text,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -376,8 +403,13 @@ internal fun HomeScreen(
                 HomeOverflow(
                     onShowLog = onShowLog,
                     onPlaceExisting = { showPlaceSheet = true },
-                    compareCleanup = compareCleanup,
-                    onToggleCleanup = { compareCleanup = !compareCleanup },
+                    showRaw = showRaw,
+                    onToggleRaw = {
+                        showRaw = !showRaw
+                        // The explanation belongs to the grey line; without it
+                        // on screen there is nothing for it to be about.
+                        explanation = null
+                    },
                 )
             }
         }
@@ -420,8 +452,8 @@ private fun describeLastImport(folders: List<File>): String? {
 private fun HomeOverflow(
     onShowLog: () -> Unit,
     onPlaceExisting: () -> Unit,
-    compareCleanup: Boolean,
-    onToggleCleanup: () -> Unit,
+    showRaw: Boolean,
+    onToggleRaw: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -438,11 +470,11 @@ private fun HomeOverflow(
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
-                text = { Text(if (compareCleanup) "Hide cleanup" else "Compare with cleanup") },
+                text = { Text(if (showRaw) "Hide raw track" else "Show raw track") },
                 leadingIcon = {
-                    if (compareCleanup) Icon(Icons.Filled.Check, contentDescription = null)
+                    if (showRaw) Icon(Icons.Filled.Check, contentDescription = null)
                 },
-                onClick = { expanded = false; onToggleCleanup() },
+                onClick = { expanded = false; onToggleRaw() },
             )
             DropdownMenuItem(
                 text = { Text("Place photos already here") },
