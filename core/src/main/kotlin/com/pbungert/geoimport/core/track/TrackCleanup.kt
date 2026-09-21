@@ -89,14 +89,24 @@ object TrackCleanup {
         SPEED_CONTRADICTION,
     }
 
-    /** One judgement about one fix, for logging and for tests. */
-    data class Note(val time: Instant, val finding: Finding, val detail: String)
+    /**
+     * One judgement about one fix. Carries the fix itself, not just when it
+     * happened, so a caller can draw what was removed rather than having to
+     * look it back up by timestamp.
+     */
+    data class Note(val point: TrackPoint, val finding: Finding, val detail: String) {
+        val time: Instant get() = point.time
+    }
 
     data class Result(val track: Track, val notes: List<Note>) {
         fun count(finding: Finding) = notes.count { it.finding == finding }
 
         /** Fixes dropped outright, as opposed to ones that lost an altitude. */
         val removedCount get() = count(Finding.POSITION_EXCURSION)
+
+        /** The dropped fixes themselves, in time order. */
+        val removedPoints: List<TrackPoint>
+            get() = notes.filter { it.finding == Finding.POSITION_EXCURSION }.map { it.point }
     }
 
     fun clean(track: Track, options: Options = Options()): Result {
@@ -171,7 +181,7 @@ object TrackCleanup {
             val back = distanceMeters(points[i], points[i + 1])
             val across = distanceMeters(points[i - 1], points[i + 1])
             notes += Note(
-                points[i].time,
+                points[i],
                 Finding.POSITION_EXCURSION,
                 "${out.toInt()} m out, ${back.toInt()} m back, " +
                     "neighbours ${across.toInt()} m apart",
@@ -197,7 +207,7 @@ object TrackCleanup {
         val eleAccuracy = point.eleAccuracy
         if (eleAccuracy != null && eleAccuracy > options.untrustedEleAccuracyMeters) {
             notes += Note(
-                point.time,
+                point,
                 Finding.ELEVATION_UNTRUSTED,
                 "vertical accuracy ${eleAccuracy.toInt()} m",
             )
@@ -217,7 +227,7 @@ object TrackCleanup {
                 across <= options.eleReturnRatio * max(up, down)
             ) {
                 notes += Note(
-                    point.time,
+                    point,
                     Finding.ELEVATION_EXCURSION,
                     "${ele.toInt()} m between ${before.toInt()} m and ${after.toInt()} m",
                 )
@@ -248,7 +258,7 @@ object TrackCleanup {
             val geometric = distanceMeters(points[i - 1], points[i]) / seconds
             if (abs(reported - geometric) <= options.speedDisagreementMetersPerSecond) continue
             notes += Note(
-                points[i].time,
+                points[i],
                 Finding.SPEED_CONTRADICTION,
                 String.format(
                     Locale.US,
