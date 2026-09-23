@@ -29,6 +29,8 @@ object TrackSelection {
     data class Choice(
         val used: List<NamedTrack>,
         val skipped: List<NamedTrack>,
+        /** Tracks carrying no real times, which can never place anything. */
+        val undated: List<NamedTrack>,
         /** First to last capture time, or null when there were no photos. */
         val photos: ClosedRange<Instant>?,
     ) {
@@ -56,10 +58,11 @@ object TrackSelection {
          * that otherwise gets blamed on the writer.
          */
         fun lines(zone: ZoneId = ZoneId.systemDefault()): List<String> {
+            // Nothing to match: the caller has something better to report than
+            // the state of the tracks.
+            if (photos == null) return emptyList()
             val total = used.size + skipped.size
-            // Nothing to match, or nothing to match it against: either way the
-            // caller has something better to report than the state of the tracks.
-            if (total == 0 || photos == null) return emptyList()
+            if (total == 0) return listOfNotNull(undatedLine())
             val range = "${format(photos.start, zone)} to ${format(photos.endInclusive, zone)}"
 
             if (used.isEmpty()) {
@@ -76,6 +79,7 @@ object TrackSelection {
                             "${format(span.start, zone)} to ${format(span.endInclusive, zone)}. " +
                             "A wrong camera clock or photo time zone looks exactly like this."
                     },
+                    undatedLine(),
                 )
             }
 
@@ -85,7 +89,20 @@ object TrackSelection {
                 "Matching against ${used.size} of $total tracks: ${describeUsed()} " +
                     "(${skipped.size} outside the photos' time range)."
             }
-            return listOfNotNull(head, cleanupLine())
+            return listOfNotNull(head, cleanupLine(), undatedLine())
+        }
+
+        /**
+         * Said out loud because the alternative is silence: a track with no
+         * times is not a track that covers other days, and reporting it as one
+         * sends you looking at your camera clock for a fault that is in the
+         * file.
+         */
+        private fun undatedLine(): String? {
+            if (undated.isEmpty()) return null
+            return "${undated.size} ${plural(undated.size, "track carries", "tracks carry")} " +
+                "no usable timestamps and cannot place anything: " +
+                undated.joinToString(", ") { it.name } + "."
         }
 
         /** Only says anything when cleaning actually changed the track. */
@@ -122,25 +139,38 @@ object TrackSelection {
     }
 
     /**
+     * Timestamps this old are placeholders rather than times. A file that
+     * writes the epoch for every point - and they exist - parses into a track
+     * that is technically dated and can never match anything.
+     */
+    private val REAL_TIMES_BEGIN: Instant = Instant.parse("1990-01-01T00:00:00Z")
+
+    /**
      * Keeps the tracks whose recorded span reaches the photos, padded by
      * [tolerance] at both ends because that is how far past a segment's end a
-     * photo can still be placed. Tracks with no timestamped points are dropped.
+     * photo can still be placed. Tracks that carry no real times are set aside
+     * separately, because nothing about the photos can bring them back.
      */
     fun choose(
         tracks: List<NamedTrack>,
         captureTimes: List<Instant>,
         tolerance: Duration,
     ): Choice {
-        val first = captureTimes.minOrNull() ?: return Choice(emptyList(), tracks, null)
+        val (dated, undated) = tracks.partition { named ->
+            val span = named.track.span ?: return@partition false
+            !span.endInclusive.isBefore(REAL_TIMES_BEGIN)
+        }
+        val first = captureTimes.minOrNull()
+            ?: return Choice(emptyList(), dated, undated, null)
         val photos = first..captureTimes.maxOrNull()!!
 
         val from = photos.start.minus(tolerance)
         val to = photos.endInclusive.plus(tolerance)
-        val (used, skipped) = tracks.partition { named ->
-            val span = named.track.span ?: return@partition false
+        val (used, skipped) = dated.partition { named ->
+            val span = named.track.span!!
             !span.endInclusive.isBefore(from) && !span.start.isAfter(to)
         }
-        return Choice(used, skipped, photos)
+        return Choice(used, skipped, undated, photos)
     }
 
     private val FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")

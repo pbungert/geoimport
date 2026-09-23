@@ -62,14 +62,48 @@ class TrackSelectionTest {
     }
 
     @Test
-    fun aTrackWithNoTimestampedPointsIsDropped() {
+    fun aTrackWithNoTimestampedPointsIsUndatedRatherThanSkipped() {
         val choice = TrackSelection.choose(
             listOf(monday, NamedTrack("empty", Track.EMPTY)),
             listOf(at(4)),
             Duration.ofMinutes(30),
         )
         assertEquals(listOf("monday"), choice.used.map { it.name })
-        assertEquals(listOf("empty"), choice.skipped.map { it.name })
+        assertEquals(emptyList<String>(), choice.skipped.map { it.name })
+        assertEquals(listOf("empty"), choice.undated.map { it.name })
+    }
+
+    /** Files that write the epoch for every point exist, and parse cleanly. */
+    private val epochTrack = NamedTrack(
+        "placeholder",
+        Track.of(
+            listOf(
+                TrackPoint(Instant.EPOCH, 46.95, 7.44, null),
+                TrackPoint(Instant.EPOCH, 46.96, 7.45, null),
+            )
+        ),
+    )
+
+    @Test
+    fun aTrackTimestampedAtTheEpochCarriesNoTimes() {
+        val choice = TrackSelection.choose(
+            listOf(monday, epochTrack), listOf(at(4)), Duration.ofMinutes(30),
+        )
+        assertEquals(listOf("placeholder"), choice.undated.map { it.name })
+        val line = choice.lines(ZoneId.of("UTC")).last()
+        assertTrue(line, line.contains("1 track carries no usable timestamps"))
+        assertTrue(line, line.contains("placeholder"))
+    }
+
+    @Test
+    fun saysWhyWhenEveryTrackIsUndated() {
+        val choice = TrackSelection.choose(
+            listOf(epochTrack), listOf(at(4)), Duration.ofMinutes(30),
+        )
+        assertEquals(
+            listOf("1 track carries no usable timestamps and cannot place anything: placeholder."),
+            choice.lines(ZoneId.of("UTC")),
+        )
     }
 
     @Test
