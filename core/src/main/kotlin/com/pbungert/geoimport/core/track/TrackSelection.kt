@@ -107,8 +107,9 @@ object TrackSelection {
 
         private fun plural(n: Int, one: String, many: String) = if (n == 1) one else many
 
+        // The count is of what will be matched against, not of what was read.
         private fun describeUsed() = used.joinToString(", ") { it.name } +
-            " (${used.sumOf { it.track.size }} points)"
+            " (${cleanedTrack.size} points)"
 
         /** How far a non-overlapping track sits from the photos, either way round. */
         private fun distanceTo(span: ClosedRange<Instant>, photos: ClosedRange<Instant>) = when {
