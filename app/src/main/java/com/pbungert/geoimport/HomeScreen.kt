@@ -333,8 +333,9 @@ internal fun HomeScreen(
                         } else {
                             "Removed at " +
                                 note.time.atZone(zone).toLocalTime().withNano(0) +
-                                " — ${note.detail}. A step that far out and " +
-                                "straight back is not a route anybody took."
+                                " — ${note.detail}. Out and straight back, " +
+                                "faster than anything around it: not a route " +
+                                "anybody took."
                         }
                     },
                     onUnderlayClick = {

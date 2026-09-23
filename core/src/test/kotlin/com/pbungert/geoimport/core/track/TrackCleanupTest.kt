@@ -79,6 +79,103 @@ class TrackCleanupTest {
     }
 
     @Test
+    fun catchesASpikeAgainstADrivingPaceToo() {
+        // 20 m/s for every ordinary step, so the 60 m/s detour stands out
+        // exactly as the 13 m/s one does against a walk.
+        val result = clean(
+            at(0), at(30, eastMeters = 600.0), at(60, eastMeters = 1200.0),
+            at(90, eastMeters = 1800.0, northMeters = 2000.0),
+            at(120, eastMeters = 1800.0), at(150, eastMeters = 2400.0),
+            at(180, eastMeters = 3000.0),
+        )
+        assertEquals(1, result.removedCount)
+        assertEquals(6, result.track.size)
+    }
+
+    @Test
+    fun keepsADetourAtCoarseSampling() {
+        // Five minutes between fixes, driving: three kilometres up to a
+        // viewpoint and back is the same shape as a spike and the same speed
+        // as the rest of the drive. It is where the photo was taken.
+        val result = clean(
+            at(0), at(300, eastMeters = 2400.0), at(600, eastMeters = 5400.0),
+            at(900, eastMeters = 5400.0, northMeters = 3000.0),
+            at(1200, eastMeters = 5500.0), at(1500, eastMeters = 8800.0),
+            at(1800, eastMeters = 11500.0),
+        )
+        assertEquals(0, result.removedCount)
+        assertEquals(7, result.track.size)
+    }
+
+    @Test
+    fun readsThePaceFromTheDriveAndNotTheWalkBeforeIt() {
+        // Twenty minutes on foot, then a drive with a detour up to a viewpoint
+        // - all one segment, all five minutes between fixes. Judged against
+        // the walk, every driving step is out of character; judged against the
+        // drive, none of them is.
+        val result = clean(
+            at(0), at(300, eastMeters = 390.0), at(600, eastMeters = 780.0),
+            at(900, eastMeters = 1170.0), at(1200, eastMeters = 1560.0),
+            at(1500, eastMeters = 4560.0), at(1800, eastMeters = 7560.0),
+            at(2100, eastMeters = 7560.0, northMeters = 3000.0),
+            at(2400, eastMeters = 7660.0), at(2700, eastMeters = 10660.0),
+        )
+        assertEquals(0, result.removedCount)
+    }
+
+    /**
+     * A known limitation, pinned so that changing it has to be deliberate.
+     *
+     * Sampled every five minutes, a walker covers four hundred metres between
+     * fixes. A four-hundred-metre spike is then indistinguishable from the
+     * walk around it - not because the test is weak, but because the file does
+     * not contain what would tell them apart. Separating them needs a map.
+     */
+    @Test
+    fun cannotTellASpikeFromAWalkAtFiveMinuteSampling() {
+        val result = clean(
+            at(0), at(300, eastMeters = 390.0),
+            at(600, eastMeters = 390.0, northMeters = 400.0),
+            at(900, eastMeters = 420.0), at(1200, eastMeters = 810.0),
+        )
+        assertEquals(0, result.removedCount)
+    }
+
+    @Test
+    fun aReportedAccuracyLowersTheBarForWhatCountsAsAnExcursion() {
+        // A second between fixes and a receiver claiming four metres: thirty
+        // metres out and back is a contradiction it has to answer for.
+        val sharp = clean(
+            at(0, accuracy = 4.0), at(1, eastMeters = 1.2, accuracy = 4.0),
+            at(2, eastMeters = 1.2, northMeters = 30.0, accuracy = 4.0),
+            at(3, eastMeters = 2.4, accuracy = 4.0), at(4, eastMeters = 3.6, accuracy = 4.0),
+        )
+        assertEquals(1, sharp.removedCount)
+
+        // The same shape from a file that rates nothing keeps the flat floor,
+        // which thirty metres does not clear.
+        val bare = clean(
+            at(0), at(1, eastMeters = 1.2),
+            at(2, eastMeters = 1.2, northMeters = 30.0),
+            at(3, eastMeters = 2.4), at(4, eastMeters = 3.6),
+        )
+        assertEquals(0, bare.removedCount)
+    }
+
+    @Test
+    fun saysNothingAboutFixesAZeroIntervalApart() {
+        // Two fixes on the same timestamp, which foreign files do produce.
+        // There is no speed to read, so there is no verdict to give.
+        val result = clean(
+            at(0), at(30, eastMeters = 20.0),
+            at(30, eastMeters = 420.0),
+            at(60, eastMeters = 37.0), at(90, eastMeters = 55.0),
+        )
+        assertEquals(0, result.removedCount)
+        assertEquals(5, result.track.size)
+    }
+
+    @Test
     fun keepsAGenuineLongStep() {
         // Moving steadily east: every step is long, but nothing comes back.
         val result = clean(
