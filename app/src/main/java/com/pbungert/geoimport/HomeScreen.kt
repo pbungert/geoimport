@@ -154,6 +154,10 @@ internal fun HomeScreen(
     val cleaned = remember(picked.map { it.name }, picked.sumOf { it.track.size }) {
         picked.associate { it.name to TrackCleanup.clean(it.track) }
     }
+    // An explanation is about one fix in one track. Choosing different tracks
+    // leaves it describing a fix that is no longer drawn, which reads as a
+    // statement about the track that replaced it.
+    LaunchedEffect(picked.map { it.name }) { explanation = null }
     val shown = picked.map { loaded ->
         val result = cleaned[loaded.name]
         DisplayTrack(
