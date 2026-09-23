@@ -111,7 +111,11 @@ object TrackCleanup {
 
     fun clean(track: Track, options: Options = Options()): Result {
         val notes = mutableListOf<Note>()
-        val segments = track.segments.map { cleanSegment(it, options, notes) }
+        // A file from elsewhere does not promise time order, and every
+        // judgement below rests on a point's neighbours being its neighbours.
+        val segments = track.segments.map {
+            cleanSegment(it.sortedBy { point -> point.time }, options, notes)
+        }
         return Result(Track(segments), notes.sortedBy { it.time })
     }
 

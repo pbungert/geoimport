@@ -41,6 +41,27 @@ class TrackCleanupTest {
     private fun clean(vararg points: TrackPoint) = TrackCleanup.clean(Track.of(points.toList()))
 
     @Test
+    fun judgesAFileFromElsewhereInTimeOrder() {
+        // A foreign GPX may list its points in any order. Read as written this
+        // straight stretch looks like a spike; read in time order it is a walk.
+        val result = TrackCleanup.clean(
+            Track(
+                listOf(
+                    listOf(
+                        at(0), at(90, eastMeters = 300.0),
+                        at(30, eastMeters = 100.0), at(60, eastMeters = 200.0),
+                    )
+                )
+            )
+        )
+        assertEquals(0, result.removedCount)
+        assertEquals(
+            listOf(0L, 30L, 60L, 90L),
+            result.track.segments.single().map { it.time.epochSecond - start.epochSecond },
+        )
+    }
+
+    @Test
     fun removesAPositionSpikeAndKeepsItsNeighbours() {
         // The shape of the 15:44:59 fix: 400 m out, 400 m back, while the
         // points either side of it are a few metres apart.
