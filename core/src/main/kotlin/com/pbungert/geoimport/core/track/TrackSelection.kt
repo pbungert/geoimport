@@ -36,6 +36,21 @@ object TrackSelection {
         val track: Track get() = Track.merge(used.map { it.track })
 
         /**
+         * [track] with the misleading fixes taken out. Cleaning the merged
+         * track is the same as cleaning each one first, because judging never
+         * crosses a segment boundary.
+         */
+        val cleanup: TrackCleanup.Result by lazy { TrackCleanup.clean(track) }
+
+        /**
+         * What a photo's position should be read from: a spike placed the
+         * device somewhere it never was, and a fix interpolated towards one
+         * inherits that. The raw [track] stays available for showing what was
+         * left out.
+         */
+        val cleanedTrack: Track get() = cleanup.track
+
+        /**
          * Lines for the log. Worth saying out loud: an import that silently
          * tags nothing because the only track is a day off is the kind of thing
          * that otherwise gets blamed on the writer.
@@ -70,8 +85,27 @@ object TrackSelection {
                 "Matching against ${used.size} of $total tracks: ${describeUsed()} " +
                     "(${skipped.size} outside the photos' time range)."
             }
-            return listOf(head)
+            return listOfNotNull(head, cleanupLine())
         }
+
+        /** Only says anything when cleaning actually changed the track. */
+        private fun cleanupLine(): String? {
+            val fixes = cleanup.removedCount
+            val altitudes = cleanup.count(TrackCleanup.Finding.ELEVATION_EXCURSION) +
+                cleanup.count(TrackCleanup.Finding.ELEVATION_UNTRUSTED)
+            val parts = listOfNotNull(
+                if (fixes > 0) "$fixes misleading ${plural(fixes, "fix", "fixes")}" else null,
+                if (altitudes > 0) {
+                    "$altitudes ${plural(altitudes, "altitude", "altitudes")}"
+                } else {
+                    null
+                },
+            )
+            if (parts.isEmpty()) return null
+            return "Leaving out ${parts.joinToString(" and ")}."
+        }
+
+        private fun plural(n: Int, one: String, many: String) = if (n == 1) one else many
 
         private fun describeUsed() = used.joinToString(", ") { it.name } +
             " (${used.sumOf { it.track.size }} points)"

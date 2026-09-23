@@ -73,7 +73,7 @@ class ImportCommand : CliktCommand(name = "import") {
             val choice = TrackSelection.choose(available, times, geotag.tolerance())
             choice.lines().forEach { echo(it) }
             choice.used.takeIf { it.isNotEmpty() }
-                ?.let { Geotagger(choice.track, geotag.tolerance()) }
+                ?.let { Geotagger(choice.cleanedTrack, geotag.tolerance()) }
                 .also { geotagger = it }
         }
 

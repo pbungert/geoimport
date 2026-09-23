@@ -78,6 +78,52 @@ class TrackSelectionTest {
         assertEquals(3, choice.track.segments.size)
     }
 
+    /**
+     * A fix 400 m out and straight back, in a track that carries nothing but
+     * time and position - which is all a GPX or KML from elsewhere has.
+     */
+    private val spiky = NamedTrack(
+        "spiky",
+        Track.of(
+            listOf(
+                bare(0, 0.0), bare(1, 20.0), bare(2, 420.0), bare(3, 37.0),
+            )
+        ),
+    )
+
+    private fun bare(minutes: Long, eastMeters: Double) = TrackPoint(
+        time = at(25).plus(Duration.ofMinutes(minutes)),
+        lat = 46.95,
+        lon = 7.44 + eastMeters / (111_320.0 * 0.6820),
+        ele = null,
+    )
+
+    private fun chooseSpiky() =
+        TrackSelection.choose(listOf(spiky), listOf(at(25)), Duration.ofMinutes(30))
+
+    @Test
+    fun tagsFromTheCleanedTrackAndKeepsTheRawOne() {
+        val choice = chooseSpiky()
+        assertEquals(3, choice.cleanedTrack.size)
+        assertEquals(4, choice.track.size)
+    }
+
+    @Test
+    fun cleaningTheSelectionKeepsEachTrackItsOwnSegment() {
+        assertEquals(3, choose(listOf(at(4), at(52))).cleanedTrack.segments.size)
+    }
+
+    @Test
+    fun saysWhatCleaningLeftOut() {
+        val lines = chooseSpiky().lines(ZoneId.of("UTC"))
+        assertTrue(lines.last(), lines.last().contains("1 misleading fix"))
+    }
+
+    @Test
+    fun saysNothingWhenThereWasNothingToClean() {
+        assertEquals(1, choose(listOf(at(25), at(30))).lines(ZoneId.of("UTC")).size)
+    }
+
     @Test
     fun explainsItselfWhenNothingOverlaps() {
         val lines = choose(listOf(at(100))).lines(ZoneId.of("UTC"))

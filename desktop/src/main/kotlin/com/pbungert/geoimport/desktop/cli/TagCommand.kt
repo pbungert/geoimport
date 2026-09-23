@@ -73,7 +73,7 @@ class TagCommand : CliktCommand(name = "tag") {
         val choice = TrackSelection.choose(available, timed.map { it.second }, geotag.tolerance())
         choice.lines().forEach { echo(it) }
         if (choice.used.isEmpty()) return
-        val geotagger = Geotagger(choice.track, geotag.tolerance())
+        val geotagger = Geotagger(choice.cleanedTrack, geotag.tolerance())
 
         val writer = geotag.writerChain { file, w, e ->
             echo("  ${w.name} failed on ${file.name} (${e.message ?: e}) - falling back", err = true)

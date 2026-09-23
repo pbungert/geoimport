@@ -457,7 +457,8 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val choice = TrackSelection.choose(available, captureTimes, tolerance)
         choice.lines().forEach(::log)
         postActiveTracks(choice.used.map { it.name }.toSet())
-        return choice.used.takeIf { it.isNotEmpty() }?.let { Geotagger(choice.track, tolerance) }
+        return choice.used.takeIf { it.isNotEmpty() }
+            ?.let { Geotagger(choice.cleanedTrack, tolerance) }
     }
 
     private fun postActiveTracks(names: Set<String>) {
@@ -670,7 +671,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             )
             return
         }
-        val geotagger = Geotagger(choice.track, tolerance)
+        val geotagger = Geotagger(choice.cleanedTrack, tolerance)
 
         // Tagging happens in place, so source and destination are the same file.
         val entries = timed.map { (file, time) ->
