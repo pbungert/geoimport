@@ -11,11 +11,16 @@ import java.util.Locale
  * Incrementally writes a GPX 1.1 file that stays well-formed after every
  * point: each write puts the new trkpt and the closing tags down in a single
  * call and syncs to disk, so a process kill never leaves a truncated file.
- * Opening an existing file resumes it by appending further points to the same
- * segment, and repairs it first if it does not end the way this writer leaves
- * it - see [repair].
+ * Opening an existing file repairs it first if it does not end the way this
+ * writer leaves it - see [repair] - and then appends to it.
+ *
+ * Appending opens a new segment unless [continueSegment] says the recording
+ * never stopped. That is only true when the recorder itself comes back after
+ * the OS killed it. A new recording that happens to reuse a name is a different
+ * outing, and joined onto the old segment the gap between the two would read
+ * as a dropout - photos in it placed on a straight line across days.
  */
-class GpxWriter(val file: File, trackName: String) {
+class GpxWriter(val file: File, trackName: String, continueSegment: Boolean = false) {
 
     private val raf: RandomAccessFile
     private var footerOffset: Long
@@ -30,6 +35,7 @@ class GpxWriter(val file: File, trackName: String) {
             raf.write(FOOTER)
         } else {
             footerOffset = repair()
+            if (!continueSegment) startNewSegment()
         }
     }
 

@@ -102,7 +102,7 @@ class TrackRecorderService : Service() {
                     .putLong(KEY_PAUSED_TOTAL, 0L)
                     .remove(KEY_PAUSED_AT)
                     .apply()
-                startRecording(name, interval, paused = false)
+                startRecording(name, interval, paused = false, continuing = false)
             }
             // Sticky restart after the OS killed the process: resume the last recording.
             intent == null && prefs().getBoolean(KEY_ACTIVE, false) -> {
@@ -111,6 +111,7 @@ class TrackRecorderService : Service() {
                     p.getString(KEY_NAME, null) ?: defaultFileName(),
                     p.getLong(KEY_INTERVAL, DEFAULT_INTERVAL_MILLIS),
                     paused = p.getBoolean(KEY_PAUSED, false),
+                    continuing = true,
                 )
             }
             else -> stopSelf()
@@ -118,7 +119,17 @@ class TrackRecorderService : Service() {
         return START_STICKY
     }
 
-    private fun startRecording(name: String, intervalMillis: Long, paused: Boolean) {
+    /**
+     * [continuing] is true only for the sticky restart, where the file is this
+     * same recording picking up after a kill. A fresh start on a name that is
+     * already taken gets a segment of its own.
+     */
+    private fun startRecording(
+        name: String,
+        intervalMillis: Long,
+        paused: Boolean,
+        continuing: Boolean,
+    ) {
         if (writer != null) return
 
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -130,7 +141,8 @@ class TrackRecorderService : Service() {
         }
 
         writer = try {
-            GpxWriter(File(tracksDir(), "$name.gpx"), name).also { scanTrack(it.file) }
+            GpxWriter(File(tracksDir(), "$name.gpx"), name, continueSegment = continuing)
+                .also { scanTrack(it.file) }
         } catch (_: Exception) {
             prefs().edit().clear().apply()
             stopSelf()

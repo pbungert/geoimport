@@ -41,6 +41,26 @@ class GpxWriterTest {
         assertEquals(3, parse(file).size)
     }
 
+    /** A new recording under a taken name is another outing, not a dropout. */
+    @Test
+    fun reusingANameStartsASegmentOfItsOwn() {
+        val file = recordTwo()
+
+        GpxWriter(file, "day").apply { addPoint(point(2)); close() }
+
+        assertEquals(listOf(2, 1), parse(file).segments.map { it.size })
+    }
+
+    /** The recorder coming back after a kill carries on the same segment. */
+    @Test
+    fun continuingKeepsTheSegmentOpen() {
+        val file = recordTwo()
+
+        GpxWriter(file, "day", continueSegment = true).apply { addPoint(point(2)); close() }
+
+        assertEquals(listOf(3), parse(file).segments.map { it.size })
+    }
+
     /** A write cut off inside a point: the partial point goes, the rest stays readable. */
     @Test
     fun cutsBackAWriteThatStoppedMidPoint() {
