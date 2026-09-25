@@ -91,6 +91,23 @@ class PhotoImporterTest {
         assertEquals(stamp, result.copied.single().lastModified())
     }
 
+    /**
+     * A wrapped counter leaves the same name in two card folders. Only one can
+     * land in the flat destination, and the result must say which - so the
+     * other's position is not written into it.
+     */
+    @Test
+    fun pairsEachCopyWithTheEntryItCameFrom() {
+        setUpCard("100_FUJI", "DSCF0001.RAF")
+        File(source, "101_FUJI").mkdirs()
+        File(File(source, "101_FUJI"), "DSCF0001.RAF").writeText("the other one")
+
+        val result = importer().run(startFilename = null, startTimestamp = null)
+
+        val (entry, copy) = result.copies.single()
+        assertEquals(entry.source.readText(), copy.readText())
+    }
+
     // --- formats and folders ---------------------------------------------
 
     @Test

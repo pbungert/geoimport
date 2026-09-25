@@ -94,15 +94,11 @@ class ImportCommand : CliktCommand(name = "import") {
 
         if (geotagger == null) return
 
-        // The plan's entries name the source files; what gets tagged is the
-        // copy, and anything that failed to copy is simply not there to tag.
+        // What gets tagged is the copy each entry actually produced. Anything
+        // that failed to copy is not there to tag, and looking a copy up by
+        // name would find a same-named photo from another card folder.
         val counts = writeGeotags(
-            plan.selected.mapNotNull { entry ->
-                val fix = entry.fix ?: return@mapNotNull null
-                File(plan.destFolder, entry.source.name)
-                    .takeIf { it.exists() }
-                    ?.let { GeotagTarget(it, fix) }
-            },
+            result.copies.map { (entry, copy) -> GeotagTarget(copy, entry.fix) },
             writer,
         ) { target, _, error ->
             if (error != null) {
@@ -112,7 +108,7 @@ class ImportCommand : CliktCommand(name = "import") {
         echo(
             "Geotagged ${counts.written} of ${result.copied.size} files " +
                 "(${counts.embedded} embedded, ${counts.sidecars} sidecars, " +
-                "${plan.withoutFix + counts.failed} untagged)."
+                "${counts.untagged} untagged)."
         )
     }
 

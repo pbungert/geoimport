@@ -21,7 +21,15 @@ class PhotoImporter(
     private val log: (String) -> Unit,
     private val extensions: Set<String> = DEFAULT_EXTENSIONS,
 ) {
-    data class ImportResult(val copied: List<File>, val destFolder: File?)
+    /**
+     * [copies] pairs each copy with the entry it was made from. That pairing is
+     * what a caller must tag by, not the file name: two card folders can hold
+     * the same name, only one of them can land in the flat destination, and
+     * looking the other up by name finds the wrong photo.
+     */
+    data class ImportResult(val copies: List<Pair<PlannedFile, File>>, val destFolder: File?) {
+        val copied get() = copies.map { it.second }
+    }
 
     /** Files this importer will pick up — also what a resume point may name. */
     fun isImportable(file: File) = file.extension.lowercase() in extensions
@@ -95,7 +103,7 @@ class PhotoImporter(
         log("Creating destination folder: ${plan.destFolder.path}...")
         plan.destFolder.mkdirs()
 
-        val copied = mutableListOf<File>()
+        val copies = mutableListOf<Pair<PlannedFile, File>>()
         val failed = mutableListOf<String>()
         val total = selected.size
         onCopyProgress(0, total, null)
@@ -104,7 +112,7 @@ class PhotoImporter(
             try {
                 val dest = entry.source.copyTo(entry.destination, overwrite = false)
                 dest.setLastModified(entry.source.lastModified())
-                copied.add(dest)
+                copies.add(entry to dest)
             } catch (e: Exception) {
                 log("Could not copy ${entry.source.name}: ${e.message ?: e}")
                 failed.add(entry.source.name)
@@ -114,8 +122,8 @@ class PhotoImporter(
         if (failed.isNotEmpty()) {
             log("${failed.size} of $total files could not be copied: ${failed.joinToString(", ")}")
         }
-        if (copied.isEmpty()) throw IOException("no files could be copied")
-        return ImportResult(copied, plan.destFolder)
+        if (copies.isEmpty()) throw IOException("no files could be copied")
+        return ImportResult(copies, plan.destFolder)
     }
 
     private fun collectSourceFiles(basePath: File): List<File>? {
