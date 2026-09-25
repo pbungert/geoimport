@@ -13,6 +13,7 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.location.LocationRequest
+import android.location.altitude.AltitudeConverter
 import android.media.MediaScannerConnection
 import android.os.Environment
 import android.os.IBinder
@@ -70,6 +71,9 @@ class TrackRecorderService : Service() {
     // One listener per provider: LocationManager keys registrations by listener,
     // so sharing one would replace the first request instead of adding to it.
     private val gpsListener = LocationListener { onFix(it, fromGps = true) }
+
+    /** Ellipsoid height to sea level; see [toTrackPoint]. */
+    private val altitudeConverter = AltitudeConverter()
     private val fusedListener = LocationListener { onFix(it, fromGps = false) }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -314,6 +318,11 @@ class TrackRecorderService : Service() {
             updateNotification()
             return
         }
+        // Non-blocking: the first fixes of a run can arrive before the geoid
+        // data has loaded, and those are written without an altitude.
+        if (location.hasAltitude() && !location.hasMslAltitude()) {
+            altitudeConverter.tryAddMslAltitudeToLocation(location)
+        }
         try {
             w.addPoint(
                 location.toTrackPoint(
@@ -498,8 +507,13 @@ class TrackRecorderService : Service() {
 }
 
 /**
- * Android fix to the portable track model. Altitude is the raw WGS-84
- * ellipsoidal height.
+ * Android fix to the portable track model.
+ *
+ * Altitude is height above mean sea level, which is what GPX `<ele>` and EXIF
+ * GPSAltitude both mean. The receiver's own [Location.getAltitude] is height
+ * above the WGS-84 ellipsoid instead - tens of metres off in most places, about
+ * +47 m across Germany - so it is never written. A fix whose sea-level height
+ * is not known yet goes without an altitude rather than with a wrong one.
  *
  * Everything the receiver says about its own fix is carried across, because
  * this is the last point at which it exists: whatever is dropped here can
@@ -511,9 +525,15 @@ private fun Location.toTrackPoint(source: String) = TrackPoint(
     time = Instant.ofEpochMilli(time),
     lat = latitude,
     lon = longitude,
-    ele = if (hasAltitude()) altitude else null,
+    ele = if (hasMslAltitude()) mslAltitudeMeters else null,
     accuracy = if (hasAccuracy()) accuracy.toDouble() else null,
-    eleAccuracy = if (hasVerticalAccuracy()) verticalAccuracyMeters.toDouble() else null,
+    // The sea-level accuracy includes the geoid model's own error on top of
+    // the receiver's vertical accuracy, so it is the one that describes [ele].
+    eleAccuracy = if (hasMslAltitude() && hasMslAltitudeAccuracy()) {
+        mslAltitudeAccuracyMeters.toDouble()
+    } else {
+        null
+    },
     speed = if (hasSpeed()) speed.toDouble() else null,
     source = source,
 )

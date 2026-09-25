@@ -41,7 +41,7 @@ object ExifGpsFormat {
     /** Altitude magnitude in millimetres; the sign lives in [altitudeRef]. */
     fun altitudeMillimetres(ele: Double) = (abs(ele) * 1000).roundToLong()
 
-    /** Metres above/below the reference ellipsoid as a millimetre rational. */
+    /** Metres above/below sea level as a millimetre rational. */
     fun altitudeRational(ele: Double) = "${altitudeMillimetres(ele)}/1000"
 
     /** 0 = above sea level, 1 = below — the sign lives here, not in the value. */
