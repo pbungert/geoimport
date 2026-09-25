@@ -528,7 +528,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             )
             return
         }
-        pendingContext = PendingImport(importer, geotagger, captureTime, geotagger != null)
+        pendingContext = PendingImport(importer, geotagger != null)
         importJob.post(Phase.Planned(plan))
     }
 
@@ -551,8 +551,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     /** Everything [executePlan] needs that the plan itself does not carry. */
     private class PendingImport(
         val importer: PhotoImporter,
-        val geotagger: Geotagger?,
-        val captureTime: CaptureTimeResolver,
+        /** The positions themselves are in the plan; this only says whether to write them. */
         val hasTrack: Boolean,
     )
 
@@ -571,7 +570,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         var counts = GeotagCounts()
-        if (context.geotagger != null) {
+        if (context.hasTrack) {
             // The chain embeds where it can - Lightroom for Android ignores XMP
             // sidecars, so a RAF position has to live in its EXIF block - and
             // falls back to a sidecar for anything else.
@@ -579,10 +578,10 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             importJob.post(Phase.Busy("Placing positions", 0, total))
             var done = 0
             var missed = 0
+            // The position each entry was previewed with, written into the copy
+            // that entry produced - so what is written is what was shown.
             counts = writeGeotags(
-                result.copied.map {
-                    GeotagTarget(it, context.geotagger.locate(context.captureTime.instantOf(it)))
-                },
+                result.copies.map { (entry, copy) -> GeotagTarget(copy, entry.fix) },
                 gpsWriter,
             ) { target, _, error ->
                 when {
