@@ -15,10 +15,12 @@ object AndroidJpegGpsWriter : JpegGpsWriter {
         exif.setAttribute(ExifInterface.TAG_GPS_LATITUDE, ExifGpsFormat.toDmsRational(point.lat))
         exif.setAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF, ExifGpsFormat.longitudeRef(point.lon))
         exif.setAttribute(ExifInterface.TAG_GPS_LONGITUDE, ExifGpsFormat.toDmsRational(point.lon))
-        point.ele?.let { ele ->
-            exif.setAttribute(ExifInterface.TAG_GPS_ALTITUDE, ExifGpsFormat.altitudeRational(ele))
-            exif.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, ExifGpsFormat.altitudeRef(ele))
-        }
+        // Null removes the tag. A fix without an altitude - often one the
+        // cleanup judged wrong - must not leave the last tagging's behind,
+        // which is what the desktop writer does too.
+        val ele = point.ele
+        exif.setAttribute(ExifInterface.TAG_GPS_ALTITUDE, ele?.let(ExifGpsFormat::altitudeRational))
+        exif.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, ele?.let(ExifGpsFormat::altitudeRef))
         exif.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, ExifGpsFormat.timeStamp(point.time))
         exif.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, ExifGpsFormat.dateStamp(point.time))
         exif.saveAttributes()
