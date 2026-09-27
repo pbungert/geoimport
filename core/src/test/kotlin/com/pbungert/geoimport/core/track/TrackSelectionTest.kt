@@ -26,6 +26,28 @@ class TrackSelectionTest {
     private fun choose(times: List<Instant>, tolerance: Duration = Duration.ofMinutes(30)) =
         TrackSelection.choose(listOf(monday, tuesday, wednesday), times, tolerance)
 
+    private fun distinct(vararg tracks: NamedTrack) =
+        TrackSelection.distinct(tracks.toList(), { it.name }, { it.track }) { t, n -> t.copy(name = n) }
+
+    /** Same name, different recordings: both are kept, the later one renamed. */
+    @Test
+    fun keepsTwoTracksThatOnlyShareAName() {
+        val other = tuesday.copy(name = "monday")
+
+        val kept = distinct(monday, other)
+
+        assertEquals(listOf("monday", "monday (2)"), kept.map { it.name })
+        assertEquals(tuesday.track, kept[1].track)
+    }
+
+    /** The same recording offered twice, under any name, is used once. */
+    @Test
+    fun dropsTheSameRecordingOfferedTwice() {
+        val kept = distinct(monday, monday.copy(name = "picked copy"), tuesday)
+
+        assertEquals(listOf("monday", "tuesday"), kept.map { it.name })
+    }
+
     @Test
     fun keepsOnlyTheTracksThatOverlapThePhotos() {
         val choice = choose(listOf(at(25), at(30)))

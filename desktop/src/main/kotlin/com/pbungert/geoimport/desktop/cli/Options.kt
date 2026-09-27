@@ -16,6 +16,7 @@ import com.pbungert.geoimport.core.geotag.XmpSidecarWriter
 import com.pbungert.geoimport.core.imports.CaptureTimeResolver
 import com.pbungert.geoimport.core.track.NamedTrack
 import com.pbungert.geoimport.core.track.TrackParser
+import com.pbungert.geoimport.core.track.TrackSelection
 import com.pbungert.geoimport.desktop.platform.DesktopExifDateReader
 import com.pbungert.geoimport.desktop.platform.DesktopJpegGpsWriter
 import com.pbungert.geoimport.desktop.platform.ExifToolGpsWriter
@@ -105,7 +106,9 @@ class GeotagOptions : OptionGroup("Geotagging") {
                     ?.let { NamedTrack(file.nameWithoutExtension, it) }
             }
             .orEmpty()
-        return (named + scanned).distinctBy { it.name }
+        return TrackSelection.distinct(named + scanned, { it.name }, { it.track }) { t, name ->
+            t.copy(name = name)
+        }
     }
 
     /**

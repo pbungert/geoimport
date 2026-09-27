@@ -404,8 +404,11 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             // Picking a file that is already in the recording folder would
-            // otherwise hand the geotagger the same recording twice.
-            val distinct = loaded.distinctBy { it.name }
+            // otherwise hand the geotagger the same recording twice. Recorded
+            // tracks come first, so they keep their names.
+            val distinct = TrackSelection.distinct(loaded, { it.name }, { it.track }) { t, name ->
+                t.copy(name = name)
+            }
             launch(Dispatchers.Main.immediate) {
                 tracks = distinct
                 // A track that is gone cannot stay selected, or an import would

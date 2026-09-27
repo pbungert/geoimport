@@ -139,6 +139,37 @@ object TrackSelection {
     }
 
     /**
+     * [items] with repeats of the same recording dropped and every name made
+     * unique.
+     *
+     * Content decides what is a repeat, not the name: a file picked by hand
+     * that is also in the recording folder is one recording, while `day.gpx`
+     * and `day.kml`, or two exports both called `Track`, are two - and
+     * dropping one of those because of its name leaves photos unplaced without
+     * a word. A later name that is already taken becomes `name (2)`, because
+     * the name is what a track is chosen and reported by.
+     */
+    fun <T> distinct(
+        items: List<T>,
+        name: (T) -> String,
+        track: (T) -> Track,
+        renamed: (T, String) -> T,
+    ): List<T> {
+        val kept = mutableListOf<T>()
+        val taken = mutableSetOf<String>()
+        for (item in items) {
+            if (kept.any { track(it) == track(item) }) continue
+            val base = name(item)
+            var unique = base
+            var n = 2
+            while (unique in taken) unique = "$base (${n++})"
+            taken += unique
+            kept += if (unique == base) item else renamed(item, unique)
+        }
+        return kept
+    }
+
+    /**
      * Timestamps this old are placeholders rather than times. A file that
      * writes the epoch for every point - and they exist - parses into a track
      * that is technically dated and can never match anything.
