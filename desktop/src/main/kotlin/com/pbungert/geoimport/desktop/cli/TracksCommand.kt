@@ -27,10 +27,10 @@ class TracksPull : CliktCommand(name = "pull") {
 
     override fun help(context: Context) = "Copy GPS tracks from a connected Android device via adb."
 
-    private val deviceDir: String by option(
+    private val deviceDir: String? by option(
         "--device-dir",
-        help = "Directory on the device to pull from",
-    ).default("/sdcard/Documents/GPS-Tracks")
+        help = "Directory on the device to pull from (default: $DEVICE_TRACKS_DIR)",
+    )
 
     private val dest: File by option(
         "--dest", "-d",
@@ -41,7 +41,28 @@ class TracksPull : CliktCommand(name = "pull") {
 
     override fun run() {
         dest.mkdirs()
-        val process = ProcessBuilder(adb, "pull", "-a", deviceDir, dest.absolutePath)
+        var (exit, output) = pull(deviceDir ?: DEVICE_TRACKS_DIR)
+        // A phone still on an app from before the folder was renamed.
+        if (exit != 0 && deviceDir == null) {
+            val legacy = pull(LEGACY_DEVICE_TRACKS_DIR)
+            if (legacy.first == 0) {
+                exit = 0
+                output = legacy.second
+            }
+        }
+        if (exit != 0) {
+            throw CliktError(
+                "adb pull failed: ${output.trim().ifEmpty { "exit $exit" }}\n" +
+                    "Is the device connected with USB debugging enabled? Try 'adb devices'."
+            )
+        }
+        echo(output.trim())
+        echo("Tracks are in ${dest.path}")
+    }
+
+    /** Exit code and combined output of one `adb pull`. */
+    private fun pull(from: String): Pair<Int, String> {
+        val process = ProcessBuilder(adb, "pull", "-a", from, dest.absolutePath)
             .redirectErrorStream(true)
             .start()
         val output = process.inputStream.bufferedReader().use { it.readText() }
@@ -49,14 +70,7 @@ class TracksPull : CliktCommand(name = "pull") {
             process.destroyForcibly()
             throw CliktError("adb pull timed out")
         }
-        if (process.exitValue() != 0) {
-            throw CliktError(
-                "adb pull failed: ${output.trim().ifEmpty { "exit ${process.exitValue()}" }}\n" +
-                    "Is the device connected with USB debugging enabled? Try 'adb devices'."
-            )
-        }
-        echo(output.trim())
-        echo("Tracks are in ${dest.path}")
+        return process.exitValue() to output
     }
 }
 
@@ -104,6 +118,17 @@ class TracksList : CliktCommand(name = "list") {
     private fun format(d: Duration) = "%dh %02dm".format(d.toHours(), d.toMinutesPart())
 }
 
-/** Where `tracks pull` puts files, and where `list` looks by default. */
-fun defaultTracksDir(): File =
-    File(System.getProperty("user.home"), "GPS-Tracks")
+private const val DEVICE_TRACKS_DIR = "/sdcard/Documents/Geoimport"
+private const val LEGACY_DEVICE_TRACKS_DIR = "/sdcard/Documents/GPS-Tracks"
+
+/**
+ * Where `tracks pull` puts files, and where `list` looks by default. A machine
+ * that already has tracks in the folder's old name keeps using it until the
+ * new one exists, rather than starting over in an empty folder.
+ */
+fun defaultTracksDir(): File {
+    val home = System.getProperty("user.home")
+    val current = File(home, "Geoimport")
+    val legacy = File(home, "GPS-Tracks")
+    return if (!current.exists() && legacy.isDirectory) legacy else current
+}

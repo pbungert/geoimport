@@ -50,7 +50,7 @@ too early, so `wait-text` first.
 | `sheet-up`, `sheet-down` | expand / collapse the bottom sheet |
 | `menu <item>` | open the overflow menu and tap an item |
 | `settle` | wait until the screen stops changing, before a `shot` |
-| `push-track <file.gpx>` | copy a track to `/sdcard/Documents/GPS-Tracks` |
+| `push-track <file.gpx>` | copy a track to `/sdcard/Documents/Geoimport` |
 | `seed-photos <folder> <YYYYMMDDhhmm...>` | dummy RAFs with those **UTC** capture times |
 | `stop`, `grant` | force-stop; re-grant all-files access |
 
@@ -161,7 +161,7 @@ export JAVA_HOME="C:\Program Files\Android\Android Studio1\jbr"
 - **Dummy `.RAF` files always fall back to XMP sidecars** - "not a RAF file
   (magic mismatch)" in the log is expected, not a regression. Only a real card
   dump exercises the embedded-EXIF writer.
-- **Tracks are only found in `/sdcard/Documents/GPS-Tracks`**, and the app needs
+- **Tracks are only found in `/sdcard/Documents/Geoimport`**, and the app needs
   `MANAGE_EXTERNAL_STORAGE`, which `adb install -g` does *not* grant - it takes
   an `appops` call, which `install` and `grant` do.
 - **A `shot` straight after a tap catches the animation** - the menu fading

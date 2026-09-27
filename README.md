@@ -111,6 +111,11 @@ where to drop exiftool so it gets bundled.
 
 ## Tracks
 
+Tracks live in `Documents/Geoimport` on Android and in `~/Geoimport` on the
+desktop. Folders from before the rename (`GPS-Tracks`) are moved on the phone
+the first time the app starts. On the desktop, the old folder is still read
+until the new one exists.
+
 The phone records; the desktop consumes. `geoimport tracks pull` uses adb over
 USB or `adb tcpip`. There is deliberately no cloud sync — a day of one-minute
 fixes is under 100 KB, and you are at the machine with the card in hand

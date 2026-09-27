@@ -219,7 +219,7 @@ internal fun TrackList(
             OutlinedButton(
                 onClick = {
                     if (!openTracksFolder(context)) {
-                        onMessage("Tracks are in Documents/GPS-Tracks on this phone.")
+                        onMessage("Tracks are in Documents/Geoimport on this device.")
                     }
                 },
                 modifier = Modifier.weight(1f),

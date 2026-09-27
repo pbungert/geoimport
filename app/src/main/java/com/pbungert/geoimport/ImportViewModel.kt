@@ -385,6 +385,9 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         // The last plan chose from a different set, so its verdict is stale.
         activeTrackNames = null
         viewModelScope.launch(Dispatchers.IO) {
+            // Every load checks, because the move needs the storage grant, and
+            // on a first run that only arrives after the first load.
+            TrackRecorderService.migrateLegacyTracksDir(app)
             val loaded = buildList {
                 // Everything this app recorded is always on offer. Excluding
                 // the folder wholesale used to be a switch; ticking the tracks

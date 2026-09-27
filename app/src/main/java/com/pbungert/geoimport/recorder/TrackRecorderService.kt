@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
@@ -86,6 +87,9 @@ class TrackRecorderService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Before a file is opened, so a recording never starts in the new
+        // folder while its predecessors still sit in the old one.
+        migrateLegacyTracksDir(this)
         when {
             intent?.action == ACTION_STOP -> {
                 stopRecording()
@@ -475,10 +479,44 @@ class TrackRecorderService : Service() {
         /** Null while idle; observed by the UI to show recording progress. */
         val state = MutableStateFlow<RecordingState?>(null)
 
+        /** Named after the app, the same on every device and in Drive. */
         fun tracksDir(): File = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
+            "Geoimport",
+        )
+
+        /** Where tracks were recorded before the folder took the app's name. */
+        private fun legacyTracksDir(): File = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS),
             "GPS-Tracks",
         )
+
+        /**
+         * Moves tracks out of the old folder, once. Normally the whole folder
+         * is renamed in one step. If both folders exist, the files are moved one
+         * at a time and any name already in the new folder stays behind - moving
+         * it would overwrite a recording.
+         */
+        fun migrateLegacyTracksDir(context: Context) {
+            val old = legacyTracksDir()
+            if (!old.isDirectory) return
+            val new = tracksDir()
+            val moved = if (!new.exists() && old.renameTo(new)) {
+                new.listFiles()?.filter { it.isFile }.orEmpty()
+            } else {
+                new.mkdirs()
+                old.listFiles()?.filter { it.isFile }.orEmpty().mapNotNull { file ->
+                    val target = File(new, file.name)
+                    target.takeIf { !it.exists() && file.renameTo(it) }
+                }.also { if (old.list()?.isEmpty() == true) old.delete() }
+            }
+            if (moved.isNotEmpty()) {
+                MediaScannerConnection.scanFile(context, moved.map { it.path }.toTypedArray(), null, null)
+            }
+            // The old paths are gone from disk; rescanning the folder drops
+            // them from the media database, so a PC over USB stops listing them.
+            MediaScannerConnection.scanFile(context, arrayOf(old.path), null, null)
+        }
 
         /**
          * [tracksDir] as a document URI, for handing a file browser or a

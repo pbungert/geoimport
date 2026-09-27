@@ -4,5 +4,5 @@
     provider can hand out any path listed here, and a share needs one file.
 -->
 <paths>
-    <external-path name="tracks" path="Documents/GPS-Tracks/" />
+    <external-path name="tracks" path="Documents/Geoimport/" />
 </paths>

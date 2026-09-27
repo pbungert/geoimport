@@ -13,7 +13,7 @@ import path from "node:path";
 
 const PKG = "com.pbungert.geoimport";
 const ACTIVITY = `${PKG}/.MainActivity`;
-const TRACKS_DIR = "/sdcard/Documents/GPS-Tracks";
+const TRACKS_DIR = "/sdcard/Documents/Geoimport";
 const REPO = path.resolve(import.meta.dirname, "../../..");
 const SHOTS = path.join(REPO, "build", "run-shots");
 
@@ -253,7 +253,7 @@ const HELP = `usage: node driver.mjs <command> [args]
   sheet-up | sheet-down       expand or collapse the bottom sheet
   menu <item>                 open the overflow menu and tap an item
   settle                      wait until the screen stops changing
-  push-track <file.gpx>       push a track to Documents/GPS-Tracks
+  push-track <file.gpx>       push a track to Documents/Geoimport
   seed-photos <folder> <YYYYMMDDhhmm...>
                               dummy RAFs with those UTC capture times`;
 

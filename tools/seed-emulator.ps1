@@ -11,7 +11,7 @@
     files carry no EXIF, so the file time is what geotagging matches against.
   - Writes a GPX whose track points bracket those capture times (zoneless local
     times, so they line up with the file times regardless of device timezone).
-  - Drops the GPX in Documents/GPS-Tracks so the in-app picker opens on it.
+  - Drops the GPX in Documents/Geoimport so the in-app picker opens on it.
   - Grants "All files access" so the Import button doesn't bounce to Settings.
 
   Dummy .RAF files are not real Fuji raws, so the RAF-EXIF GPS writer rejects
@@ -116,9 +116,9 @@ foreach ($p in $track) {
 
 $gpxLocal = Join-Path $staging "geoimport-test.gpx"
 [IO.File]::WriteAllText($gpxLocal, $sb.ToString())
-Adb shell "mkdir -p /sdcard/Documents/GPS-Tracks" | Out-Null
-Adb push $gpxLocal /sdcard/Documents/GPS-Tracks/geoimport-test.gpx | Out-Null
-Write-Host "GPX -> /sdcard/Documents/GPS-Tracks/geoimport-test.gpx"
+Adb shell "mkdir -p /sdcard/Documents/Geoimport" | Out-Null
+Adb push $gpxLocal /sdcard/Documents/Geoimport/geoimport-test.gpx | Out-Null
+Write-Host "GPX -> /sdcard/Documents/Geoimport/geoimport-test.gpx"
 
 # --- grant All-files access so Import doesn't bounce to Settings ------------
 Adb shell appops set com.pbungert.geoimport MANAGE_EXTERNAL_STORAGE allow 2>$null | Out-Null
