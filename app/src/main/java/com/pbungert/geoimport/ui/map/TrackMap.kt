@@ -250,14 +250,20 @@ fun TrackMap(
     // picked other tracks, and that outranks wherever the camera is pointing -
     // including at the blue dot.
     var framedNames by remember { mutableStateOf<List<String>?>(null) }
+    var framedPadding by remember { mutableStateOf<PaddingValues?>(null) }
     LaunchedEffect(pointCount, trackNames, fitPadding) {
         val pickedOtherTracks = trackNames != framedNames
         if (followingMyLocation && !pickedOtherTracks) return@LaunchedEffect
+        // Same tracks, same padding: only points were added, as while recording.
+        // The track was framed when it was opened; zooming back out on every new
+        // fix would undo whatever the user has panned or zoomed to since.
+        if (!pickedOtherTracks && fitPadding == framedPadding) return@LaunchedEffect
         val points = tracks.flatMap { it.framedPoints }
         if (points.isEmpty()) return@LaunchedEffect
         // Only once there is something to frame, so an empty selection leaves
         // the camera where it was and the next real one still counts as new.
         framedNames = trackNames
+        framedPadding = fitPadding
         if (pickedOtherTracks) followingMyLocation = false
         val south = points.minOf { it.lat }
         val north = points.maxOf { it.lat }
