@@ -181,8 +181,32 @@ class PhotoImporter(
         startTimestamp: LocalDateTime?,
     ): List<File> {
         val sorted = sortByFilenameChronological(files)
+        // No number in the name means no place in the camera's sequence, so
+        // these are judged on their own below rather than dropped unseen.
+        val unnumbered = (files - sorted.toSet()).sortedBy { it.name }
 
-        if (startFilename == null && startTimestamp == null) return sorted
+        if (startFilename == null && startTimestamp == null) return sorted + unnumbered
+        if (startTimestamp != null) {
+            val newer = unnumbered.filter { captureTime.localOf(it).isAfter(startTimestamp) }
+            return filterNumbered(sorted, null, startTimestamp) + newer
+        }
+        if (unnumbered.isNotEmpty()) {
+            // Nothing says whether they came before the resume file or after
+            // it, and importing them every run would duplicate them.
+            log(
+                "Skipped ${unnumbered.size} files with no number in their name, which a " +
+                    "filename resume cannot place: ${unnumbered.joinToString(", ") { it.name }}. " +
+                    "Resume from a timestamp to include them."
+            )
+        }
+        return filterNumbered(sorted, startFilename, null)
+    }
+
+    private fun filterNumbered(
+        sorted: List<File>,
+        startFilename: String?,
+        startTimestamp: LocalDateTime?,
+    ): List<File> {
 
         var started = false
         val result = mutableListOf<File>()

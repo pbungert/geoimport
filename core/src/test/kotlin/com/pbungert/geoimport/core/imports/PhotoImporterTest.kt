@@ -7,6 +7,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.time.LocalDateTime
 
 class PhotoImporterTest {
 
@@ -89,6 +90,37 @@ class PhotoImporterTest {
         val result = importer().run(startFilename = null, startTimestamp = null)
 
         assertEquals(stamp, result.copied.single().lastModified())
+    }
+
+    // --- files with no number in their name ------------------------------
+
+    @Test
+    fun importsUnnumberedFilesWhenThereIsNoResumePoint() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "PANO.JPG")
+        val result = importer().run(startFilename = null, startTimestamp = null)
+        assertEquals(listOf("DSCF0001.RAF", "PANO.JPG"), result.copied.map { it.name })
+    }
+
+    @Test
+    fun judgesUnnumberedFilesByTimeWhenResumingFromATimestamp() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "OLD.JPG", "NEW.JPG")
+        val dir = File(source, "101_FUJI")
+        File(dir, "OLD.JPG").setLastModified(631_152_000_000L) // 1990
+        val since = LocalDateTime.of(2000, 1, 1, 0, 0)
+
+        val result = importer().run(startFilename = null, startTimestamp = since)
+
+        assertEquals(listOf("DSCF0001.RAF", "NEW.JPG"), result.copied.map { it.name })
+    }
+
+    @Test
+    fun saysWhenAFilenameResumeSkipsUnnumberedFiles() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0002.RAF", "PANO.JPG")
+
+        val result = importer().run(startFilename = "DSCF0001.RAF", startTimestamp = null)
+
+        assertEquals(listOf("DSCF0002.RAF"), result.copied.map { it.name })
+        assertTrue(log.any { it.contains("PANO.JPG") })
     }
 
     /**
