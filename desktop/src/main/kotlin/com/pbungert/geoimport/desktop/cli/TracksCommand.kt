@@ -17,11 +17,10 @@ class TracksCommand : CliktCommand(name = "tracks") {
 }
 
 /**
- * Copies tracks off the phone with adb.
- *
- * Deliberately not a cloud sync: a day of one-minute fixes is under 100 KB,
- * and you are standing at the machine with the card in your hand anyway. adb
- * needs no account, and works over USB or `adb tcpip`.
+ * Copies tracks off the phone with adb. The app's own sync goes through
+ * Google Drive, which a PC reaches through Drive for Desktop. This is the way
+ * in for anyone without either: adb needs no account, and works over USB or
+ * `adb tcpip`.
  */
 class TracksPull : CliktCommand(name = "pull") {
 

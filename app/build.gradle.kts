@@ -1,7 +1,16 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+// The owner's signing key, from keystore.properties next to settings.gradle.kts
+// (kept out of git). Drive sign-in only accepts the keys registered in Google
+// Cloud, so the APK that goes onto the phone must be signed with this one.
+val keystoreProperties = rootProject.file("keystore.properties")
+    .takeIf { it.isFile }
+    ?.let { file -> Properties().apply { file.inputStream().use(::load) } }
 
 android {
     namespace = "com.pbungert.geoimport"
@@ -27,14 +36,26 @@ android {
         }
     }
 
+    signingConfigs {
+        if (keystoreProperties != null) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             optimization {
                 enable = true
             }
-            // Sideload-only app: sign release with the debug key so release
-            // builds install over debug builds without juggling keystores.
-            signingConfig = signingConfigs.getByName("debug")
+            // Without keystore.properties - on CI, or another machine - the
+            // debug key stands in: the build still installs, but only over
+            // another debug-signed one, and cannot sign in to Drive.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
     compileOptions {
@@ -61,6 +82,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.maplibre.compose)
     implementation(libs.maplibre.compose.material3)
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.play.services.auth)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

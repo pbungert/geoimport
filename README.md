@@ -116,10 +116,52 @@ desktop. Folders from before the rename (`GPS-Tracks`) are moved on the phone
 the first time the app starts. On the desktop, the old folder is still read
 until the new one exists.
 
-The phone records; the desktop consumes. `geoimport tracks pull` uses adb over
-USB or `adb tcpip`. There is deliberately no cloud sync — a day of one-minute
-fixes is under 100 KB, and you are at the machine with the card in hand
-anyway.
+### Sync (opt-in)
+
+Recording on the phone and importing on a tablet means the tracks have to get
+from one to the other. The app syncs the track folder with a `Geoimport` folder
+in the user's own Google Drive. It starts after a recording stops, when the
+app opens, and hourly in the background. Each Google account has its own
+tracks, and nothing is synced until someone signs in (⋮ → Sync tracks).
+
+The rules live in `core/sync` (`SyncPlanner`), which is unit-tested with no
+network:
+
+- **Tracks are only ever added.** Deleting a track on one device removes it
+  from that device only. It is not downloaded there again, and it stays in
+  Drive and on the other devices.
+- **A track that grew is replaced everywhere.** Resuming a recording under the
+  same name appends to the file, and the longer file replaces the older copy.
+- **A conflict keeps both versions.** If a file changed on both sides, Drive's
+  version keeps the name and the local one becomes `name (2)`.
+- **A track is uploaded once it's finished.** The one still being recorded is
+  left out of every sync.
+
+The app uses the `drive.file` scope, so it sees only files it created. On a
+PC, Google Drive for Desktop mirrors the folder, and
+`--tracks-dir "G:\My Drive\Geoimport"` reads it like any other folder. Without
+Drive, `geoimport tracks pull` still copies tracks over adb.
+
+One-time Google Cloud setup, done by whoever builds the APK:
+
+1. Create a Cloud project and enable the **Google Drive API**.
+2. Create an OAuth consent screen: type *External*, with the scope
+   `.../auth/drive.file`. Then **publish it to production**. In *Testing*
+   mode, access expires after 7 days, and every user has to be added as a
+   test user. `drive.file` is a non-sensitive scope, so publishing needs no
+   verification.
+3. Create an OAuth client of type **Android** for each key that signs an APK
+   you install, with the package `com.pbungert.geoimport` and that key's
+   SHA-1:
+   - **Release builds** are signed with the key named in `keystore.properties`
+     in the project root. That file is not in git; it holds `storeFile`,
+     `storePassword`, `keyAlias` and `keyPassword`. Without it, for example on
+     CI, release builds fall back to the debug key.
+   - **Debug builds** use the debug key, which is different on every machine:
+     `keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android`.
+
+No client ID goes into the code. Play services matches the app to the client
+by its package and signature. Devices need Google Play services.
 
 ## Tests
 

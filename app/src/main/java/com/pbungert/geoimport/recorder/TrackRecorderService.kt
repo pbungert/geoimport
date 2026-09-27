@@ -25,6 +25,7 @@ import android.provider.DocumentsContract
 import com.pbungert.geoimport.MainActivity
 import com.pbungert.geoimport.core.model.TrackPoint
 import com.pbungert.geoimport.core.track.GpxWriter
+import com.pbungert.geoimport.sync.SyncManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
 import java.time.Instant
@@ -100,7 +101,8 @@ class TrackRecorderService : Service() {
             intent?.action == ACTION_START -> {
                 val interval = intent.getLongExtra(EXTRA_INTERVAL_MILLIS, DEFAULT_INTERVAL_MILLIS)
                     .coerceAtLeast(1000L)
-                val name = sanitize(intent.getStringExtra(EXTRA_FILENAME)) ?: defaultFileName()
+                val name = sanitize(intent.getStringExtra(EXTRA_FILENAME))
+                    ?: defaultFileName(taken = SyncManager.knownTrackNames(this))
                 prefs().edit()
                     .putBoolean(KEY_ACTIVE, true)
                     .putBoolean(KEY_PAUSED, false)
@@ -365,6 +367,8 @@ class TrackRecorderService : Service() {
         cleanup()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+        // A finished track is what the other devices are waiting for.
+        SyncManager.syncNow(this)
     }
 
     private fun cleanup() {
@@ -534,12 +538,31 @@ class TrackRecorderService : Service() {
             )
         }
 
-        /** Today's date plus the first free counter, e.g. 2026-07-17_01. */
-        fun defaultFileName(dir: File = tracksDir()): String {
+        /**
+         * Today's date plus the first free counter, e.g. 2026-07-17_01. A name
+         * in [taken] is not free either: it is one sync knows from another
+         * device, or one deleted here that is still in Drive.
+         */
+        fun defaultFileName(dir: File = tracksDir(), taken: Set<String> = emptySet()): String {
             val date = LocalDate.now().toString()
             var n = 1
-            while (File(dir, String.format(Locale.US, "%s_%02d.gpx", date, n)).exists()) n++
+            while (true) {
+                val file = String.format(Locale.US, "%s_%02d.gpx", date, n)
+                if (!File(dir, file).exists() && file !in taken) break
+                n++
+            }
             return String.format(Locale.US, "%s_%02d", date, n)
+        }
+
+        /**
+         * The file a recording is appending to, or null when none is. Read
+         * from the saved run rather than [state], which is empty when this
+         * process was started for something else before the service came back.
+         */
+        fun activeFileName(context: Context): String? {
+            val p = context.getSharedPreferences(PREFS, MODE_PRIVATE)
+            if (!p.getBoolean(KEY_ACTIVE, false)) return null
+            return p.getString(KEY_NAME, null)?.let { "$it.gpx" }
         }
     }
 }

@@ -35,7 +35,11 @@ import com.pbungert.geoimport.core.track.TrackSelection
 import com.pbungert.geoimport.recorder.TrackRecorderService
 import com.pbungert.geoimport.platform.AndroidExifDateReader
 import com.pbungert.geoimport.platform.AndroidJpegGpsWriter
+import com.pbungert.geoimport.sync.SyncManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -304,6 +308,18 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     init {
         pickedUris = readPickedUris()
         refreshTracks()
+        SyncManager.init(app)
+        SyncManager.schedule(app)
+        SyncManager.syncNow(app)
+        // A sync that brought tracks down or moved one aside changed the
+        // folder under the list; it reloads the same way a finished import does.
+        viewModelScope.launch {
+            SyncManager.status
+                .map { it.localChanges }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { refreshTracks() }
+        }
     }
 
     fun addTracks(uris: List<Uri>) {

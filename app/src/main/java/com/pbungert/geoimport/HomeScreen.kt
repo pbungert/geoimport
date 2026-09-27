@@ -116,6 +116,7 @@ internal fun HomeScreen(
     var peekContentHeight by remember { mutableStateOf(160.dp) }
     var showRecordSheet by rememberSaveable { mutableStateOf(false) }
     var showPlaceSheet by rememberSaveable { mutableStateOf(false) }
+    var showSyncSheet by rememberSaveable { mutableStateOf(false) }
     // The cleaned track is the track. The raw one is evidence, shown on demand
     // by someone asking what the cleanup did - so it is off, and says nothing
     // until it is tapped.
@@ -408,6 +409,7 @@ internal fun HomeScreen(
                 HomeOverflow(
                     onShowLog = onShowLog,
                     onPlaceExisting = { showPlaceSheet = true },
+                    onSync = { showSyncSheet = true },
                     showRaw = showRaw,
                     onToggleRaw = {
                         showRaw = !showRaw
@@ -429,6 +431,9 @@ internal fun HomeScreen(
                 requestRecording(name, minutes)
             },
         )
+    }
+    if (showSyncSheet) {
+        SyncSheet(onDismiss = { showSyncSheet = false })
     }
     if (showPlaceSheet) {
         PickFolderSheet(
@@ -457,6 +462,7 @@ private fun describeLastImport(folders: List<File>): String? {
 private fun HomeOverflow(
     onShowLog: () -> Unit,
     onPlaceExisting: () -> Unit,
+    onSync: () -> Unit,
     showRaw: Boolean,
     onToggleRaw: () -> Unit,
 ) {
@@ -484,6 +490,10 @@ private fun HomeOverflow(
             DropdownMenuItem(
                 text = { Text("Place photos already here") },
                 onClick = { expanded = false; onPlaceExisting() },
+            )
+            DropdownMenuItem(
+                text = { Text("Sync tracks") },
+                onClick = { expanded = false; onSync() },
             )
             DropdownMenuItem(
                 text = { Text("Import log") },

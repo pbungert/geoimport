@@ -42,10 +42,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pbungert.geoimport.recorder.TrackRecorderService
+import com.pbungert.geoimport.sync.SyncManager
 import java.io.File
 
 // The two sheets the home screen opens: one to start a recording, one to
@@ -69,7 +71,10 @@ internal fun RecordSheet(
     onStart: (name: String, minutes: Double) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val defaultName = remember { TrackRecorderService.defaultFileName() }
+    val context = LocalContext.current
+    val defaultName = remember {
+        TrackRecorderService.defaultFileName(taken = SyncManager.knownTrackNames(context))
+    }
     val name = rememberTextFieldState()
     var interval by rememberSaveable { mutableStateOf(viewModel.recordIntervalMinutes) }
     var custom by rememberSaveable {
