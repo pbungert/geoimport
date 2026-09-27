@@ -41,8 +41,12 @@ object DesktopJpegGpsWriter : JpegGpsWriter {
             GpsTagConstants.GPS_TAG_GPS_DATE_STAMP,
         ).forEach { gps.removeField(it) }
 
-        // Handles both the refs and the DMS rationals for lat/lon.
-        outputSet.setGpsInDegrees(point.lon, point.lat)
+        // Built from ExifGpsFormat's parts rather than setGpsInDegrees, which
+        // rounds its own way: the rationals here are the ones Android writes.
+        gps.add(GpsTagConstants.GPS_TAG_GPS_LATITUDE_REF, ExifGpsFormat.latitudeRef(point.lat))
+        gps.add(GpsTagConstants.GPS_TAG_GPS_LATITUDE, *dmsRationals(point.lat))
+        gps.add(GpsTagConstants.GPS_TAG_GPS_LONGITUDE_REF, ExifGpsFormat.longitudeRef(point.lon))
+        gps.add(GpsTagConstants.GPS_TAG_GPS_LONGITUDE, *dmsRationals(point.lon))
 
         point.ele?.let { ele ->
             gps.add(
@@ -64,6 +68,19 @@ object DesktopJpegGpsWriter : JpegGpsWriter {
         )
         gps.add(GpsTagConstants.GPS_TAG_GPS_DATE_STAMP, ExifGpsFormat.dateStamp(point.time))
 
+        writeLosslessly(jpeg, outputSet)
+    }
+
+    /** The same "deg/1,min/1,sec*1e4/1e4" triplet as [ExifGpsFormat.toDmsRational]. */
+    private fun dmsRationals(value: Double): Array<RationalNumber> = with(ExifGpsFormat.toDms(value)) {
+        arrayOf(
+            RationalNumber(degrees.toInt(), 1),
+            RationalNumber(minutes.toInt(), 1),
+            RationalNumber(secondsE4.toInt(), 10_000),
+        )
+    }
+
+    private fun writeLosslessly(jpeg: File, outputSet: TiffOutputSet) {
         val temp = File(jpeg.parentFile, jpeg.name + ".exif.tmp")
         try {
             temp.outputStream().buffered().use { out ->

@@ -57,6 +57,25 @@ class DesktopJpegGpsWriterTest {
         assertEquals(11.5756, location.longitude, 1e-6)
     }
 
+    /**
+     * Not just the same place but the same stored numbers as the Android
+     * writer, which builds its rationals from ExifGpsFormat.toDms.
+     */
+    @Test
+    fun storesTheSameRationalsAsTheAndroidWriter() {
+        val file = jpeg()
+        DesktopJpegGpsWriter.writeGps(file, munich)
+
+        val gps = gpsOf(file)
+        for ((tag, value) in listOf(
+            GpsDirectory.TAG_LATITUDE to munich.lat,
+            GpsDirectory.TAG_LONGITUDE to munich.lon,
+        )) {
+            val stored = gps.getRationalArray(tag).map { "${it.numerator}/${it.denominator}" }
+            assertEquals(ExifGpsFormat.toDmsRational(value).split(","), stored)
+        }
+    }
+
     @Test
     fun keepsTheSouthernAndWesternHemispheresStraight() {
         val file = jpeg()
