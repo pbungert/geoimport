@@ -92,6 +92,17 @@ class PhotoImporterTest {
         assertEquals(stamp, result.copied.single().lastModified())
     }
 
+    /** Whatever order the directory lists a RAW+JPEG pair in, it sorts the same. */
+    @Test
+    fun ordersAPairTheSameWhateverTheListingOrder() {
+        val raf = File("DSCF0001.RAF")
+        val jpg = File("DSCF0001.JPG")
+        assertEquals(
+            PhotoImporter.sortByFilenameChronological(listOf(raf, jpg)),
+            PhotoImporter.sortByFilenameChronological(listOf(jpg, raf)),
+        )
+    }
+
     // --- files with no number in their name ------------------------------
 
     @Test

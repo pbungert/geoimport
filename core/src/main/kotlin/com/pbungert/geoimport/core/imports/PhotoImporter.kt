@@ -286,7 +286,14 @@ class PhotoImporter(
         fun sortByFilenameChronological(files: List<File>): List<File> {
             val parsed = files
                 .mapNotNull { f -> parseFilenameSequence(f.name)?.let { f to it } }
-                .sortedBy { it.second.value }
+                // A RAW and its JPEG share a number. Without the name as a tie
+                // break their order is whatever the directory listing gave, so
+                // the resume file and the card could disagree on which of a
+                // pair came last - and the other would be imported again.
+                .sortedWith(
+                    compareBy<Pair<File, FilenameSequence>> { it.second.value }
+                        .thenBy { it.first.name.lowercase() }
+                )
 
             if (parsed.size < 2) return parsed.map { it.first }
 
