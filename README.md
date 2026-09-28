@@ -147,6 +147,22 @@ above both.
 - **Both devices imported:** the later photo and the higher number win.
 - **An explicit start filename or time** still overrides both.
 
+The camera settings sync the same way, in `State/import-settings.properties`:
+- which file types to leave on the card
+- the camera clock offset
+- the photo time zone
+- the tolerance
+
+Each setting keeps its own time of change, so edits on two devices merge
+setting by setting. The record interval stays on each device.
+
+File types are chosen in the import preview. The card is read for every
+common photo and video format, including RAW formats beyond RAF, and each type
+found is shown as a chip ("RAF 120 · JPG 120"). Unticking a type deselects its
+files and is remembered for the next import. A type never seen before starts
+ticked, so nothing new is skipped silently. On the desktop, `--exclude jpg,mov`
+does the same, and it defaults to the synced choice.
+
 The app uses the `drive.file` scope, so it sees only files it created. On a
 PC, Google Drive for Desktop mirrors the folder, and
 `--tracks-dir "G:\My Drive\Geoimport"` reads it like any other folder,

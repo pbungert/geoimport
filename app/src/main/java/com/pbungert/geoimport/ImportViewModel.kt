@@ -26,6 +26,7 @@ import com.pbungert.geoimport.core.geotag.GeotagTarget
 import com.pbungert.geoimport.core.geotag.writeGeotags
 import com.pbungert.geoimport.core.geotag.XmpSidecarWriter
 import com.pbungert.geoimport.core.imports.CaptureTimeResolver
+import com.pbungert.geoimport.core.imports.CameraSettings
 import com.pbungert.geoimport.core.imports.ImportPlan
 import com.pbungert.geoimport.core.imports.LastImport
 import com.pbungert.geoimport.core.imports.PlannedFile
@@ -113,11 +114,36 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * The settings that describe the camera rather than this device, shared
+     * with the other devices through sync. A copy stays in [prefs] too, so a
+     * device without storage access yet still remembers its own.
+     */
+    private var cameraSettings = loadCameraSettings()
+
+    private inner class Shared(private val key: String, private val prefsKey: String, private val default: String) {
+        private val state = mutableStateOf(current())
+        operator fun getValue(thisRef: Any?, property: KProperty<*>) = state.value
+        operator fun setValue(thisRef: Any?, property: KProperty<*>, value: String) {
+            state.value = value
+            prefs.edit().putString(prefsKey, value).apply()
+            updateCameraSettings { it.with(key, value, Instant.now()) }
+        }
+
+        /** Picks up a value another device synced. */
+        fun reload() {
+            state.value = current()
+        }
+
+        private fun current() = cameraSettings[key] ?: prefs.getString(prefsKey, null) ?: default
+    }
+
     // Per-run, deliberately not persisted: a stale resume point is dangerous.
     var startFilename by mutableStateOf("")
     var startTimestamp by mutableStateOf("")
 
-    var toleranceMinutes by Saved(KEY_TOLERANCE, "30")
+    private val tolerance = Shared(CameraSettings.TOLERANCE_MINUTES, KEY_TOLERANCE, "30")
+    var toleranceMinutes by tolerance
 
     /**
      * Minutes between recorded points, kept across runs: it follows how you
@@ -130,13 +156,74 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
      * OffsetTimeOriginal. Blank means this device's zone - right when you
      * shoot and import in the same place, wrong for a trip imported at home.
      */
-    var photoTimeZone by Saved(KEY_PHOTO_ZONE, "")
+    private val photoZone = Shared(CameraSettings.PHOTO_TIME_ZONE, KEY_PHOTO_ZONE, "")
+    var photoTimeZone by photoZone
 
     /**
      * Camera clock error in minutes, added to every capture time. Negative if
      * the camera runs fast. Blank means no correction.
      */
-    var clockOffsetMinutes by Saved(KEY_CLOCK_OFFSET, "")
+    private val clockOffset = Shared(CameraSettings.CLOCK_OFFSET_MINUTES, KEY_CLOCK_OFFSET, "")
+    var clockOffsetMinutes by clockOffset
+
+    /**
+     * File types left on the card, lower case. Chosen in the preview, from
+     * the types that card actually holds; a type never seen before is taken.
+     */
+    var excludedTypes by mutableStateOf(cameraSettings.excludedTypes)
+        private set
+
+    /** Takes or leaves every file of [type] in the preview, and remembers it for next time. */
+    fun setTypeSelected(type: String, selected: Boolean) {
+        importJob.setType(type, selected)
+        val next = if (selected) excludedTypes - type else excludedTypes + type
+        excludedTypes = next
+        updateCameraSettings { it.withExcludedTypes(next, Instant.now()) }
+    }
+
+    private fun settingsFile() = CameraSettings.fileIn(TrackRecorderService.tracksDir())
+
+    /**
+     * The shared settings, with this device's own saved values moved in the
+     * first time. They are dated at the epoch, so a value another device has
+     * already synced wins over them.
+     */
+    private fun loadCameraSettings(): CameraSettings {
+        val file = settingsFile()
+        var settings = CameraSettings.read(file)
+        val carried = listOf(
+            CameraSettings.TOLERANCE_MINUTES to KEY_TOLERANCE,
+            CameraSettings.PHOTO_TIME_ZONE to KEY_PHOTO_ZONE,
+            CameraSettings.CLOCK_OFFSET_MINUTES to KEY_CLOCK_OFFSET,
+        )
+        for ((key, prefsKey) in carried) {
+            val own = prefs.getString(prefsKey, null)?.takeIf { it.isNotBlank() } ?: continue
+            if (settings[key] == null) settings = settings.with(key, own, Instant.EPOCH)
+        }
+        if (settings != CameraSettings.read(file)) runCatching { CameraSettings.save(settings, file) }
+        return settings
+    }
+
+    /** Applies [change], saves it for sync, and sends it on its way. */
+    private fun updateCameraSettings(change: (CameraSettings) -> CameraSettings) {
+        cameraSettings = change(cameraSettings)
+        val snapshot = cameraSettings
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { CameraSettings.save(snapshot, settingsFile()) }
+                .onFailure { log("Could not save the import settings for sync: ${it.message}") }
+            SyncManager.syncNow(getApplication())
+        }
+    }
+
+    /** After a sync: what another device changed shows up here. */
+    private suspend fun reloadCameraSettings() {
+        val read = withContext(Dispatchers.IO) { CameraSettings.read(settingsFile()) }
+        cameraSettings = CameraSettings.merge(cameraSettings, read)
+        tolerance.reload()
+        photoZone.reload()
+        clockOffset.reload()
+        excludedTypes = cameraSettings.excludedTypes
+    }
 
     /** False only when text has been typed and it is not a known zone id. */
     val photoTimeZoneIsValid: Boolean
@@ -263,6 +350,12 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             post(Phase.Idle)
         }
 
+        /** Includes or excludes every file of one type before the run is confirmed. */
+        fun setType(type: String, selected: Boolean) {
+            val plan = (phase as? Phase.Planned)?.plan ?: return
+            post(Phase.Planned(plan.withType(type, selected)))
+        }
+
         /** Includes or excludes one file before the run is confirmed. */
         fun setSelected(source: File, selected: Boolean) {
             val plan = (phase as? Phase.Planned)?.plan ?: return
@@ -321,7 +414,10 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                 .map { it.localChanges }
                 .distinctUntilChanged()
                 .drop(1)
-                .collect { refreshTracks() }
+                .collect {
+                    refreshTracks()
+                    reloadCameraSettings()
+                }
         }
     }
 
@@ -535,7 +631,10 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val captureTime = CaptureTimeResolver(AndroidExifDateReader, assumedZone, cameraClockOffset)
         val lastImport = LastImport.read(LastImport.fileIn(TrackRecorderService.tracksDir()))
         val importer = PhotoImporter(
-            source, destBase, captureTime, ::log, lastImport = lastImport,
+            source, destBase, captureTime, ::log,
+            extensions = PhotoImporter.MEDIA_EXTENSIONS,
+            lastImport = lastImport,
+            excludedTypes = excludedTypes,
         )
         // The track is picked here rather than up front: which recordings are
         // worth matching against only becomes answerable once the photos on the

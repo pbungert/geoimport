@@ -5,6 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.MoreVert
@@ -30,6 +33,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -168,6 +172,9 @@ internal fun JobScreen(
                                 if (placingOnly) viewModel.setTagSelected(source, selected)
                                 else viewModel.setSelected(source, selected)
                             },
+                            // Placing works on what is already imported, where
+                            // leaving a type out has nothing to do with the card.
+                            onTypeToggle = if (placingOnly) null else viewModel::setTypeSelected,
                             onCancel = { leave() },
                             onConfirm = {
                                 if (placingOnly) viewModel.confirmTagging() else viewModel.confirmImport()
@@ -280,6 +287,7 @@ private fun PlanPanel(
     placing: Boolean,
     running: Boolean,
     onToggle: (File, Boolean) -> Unit,
+    onTypeToggle: ((String, Boolean) -> Unit)?,
     onCancel: () -> Unit,
     onConfirm: () -> Unit,
 ) {
@@ -310,6 +318,8 @@ private fun PlanPanel(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+
+        if (onTypeToggle != null) TypeChips(plan.types, onTypeToggle)
 
         HorizontalDivider()
 
@@ -343,6 +353,31 @@ private fun PlanPanel(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+    }
+}
+
+/**
+ * The file types on the card, each taken or left in one tap. Leaving one out
+ * is remembered, and synced, for the next import; a type that is only partly
+ * picked counts as taken, and a tap leaves all of it.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TypeChips(types: List<ImportPlan.TypeCount>, onToggle: (String, Boolean) -> Unit) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (type in types) {
+            val taken = type.selected > 0
+            FilterChip(
+                selected = taken,
+                onClick = { onToggle(type.type, !taken) },
+                label = { Text("${type.type.uppercase()} ${type.total}") },
+                leadingIcon = if (taken) {
+                    { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                } else {
+                    null
+                },
+            )
         }
     }
 }
