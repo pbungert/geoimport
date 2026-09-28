@@ -13,6 +13,7 @@ import com.pbungert.geoimport.core.geotag.BuiltInGpsWriter
 import com.pbungert.geoimport.core.geotag.FallbackGpsWriter
 import com.pbungert.geoimport.core.geotag.GpsWriter
 import com.pbungert.geoimport.core.geotag.XmpSidecarWriter
+import com.pbungert.geoimport.core.imports.CameraSettings
 import com.pbungert.geoimport.core.imports.CaptureTimeResolver
 import com.pbungert.geoimport.core.track.NamedTrack
 import com.pbungert.geoimport.core.track.TrackParser
@@ -39,17 +40,18 @@ class GeotagOptions : OptionGroup("Geotagging") {
             "leaves them. The ones covering the photos are used and the rest ignored",
     ).file(mustExist = true, canBeFile = false, mustBeReadable = true)
 
-    val toleranceMinutes: Long by option(
+    val toleranceMinutes: Long? by option(
         "--tolerance",
         help = "How far outside a recorded stretch of track a photo may still be placed, " +
-            "in minutes. Also decides which tracks count as covering the photos",
-    ).long().default(30)
+            "in minutes. Also decides which tracks count as covering the photos " +
+            "(default: the synced setting, else 30)",
+    ).long()
 
     val photoZone: String? by option(
         "--photo-tz",
         help = "Zone the camera's clock was set to, e.g. Asia/Tokyo. " +
-            "Used only when the camera recorded no EXIF offset; defaults to this machine's zone, " +
-            "which is wrong for a trip imported after you get home",
+            "Used only when the camera recorded no EXIF offset; defaults to the synced setting, " +
+            "else this machine's zone, which is wrong for a trip imported after you get home",
     )
 
     val trackZone: String? by option(
@@ -57,24 +59,39 @@ class GeotagOptions : OptionGroup("Geotagging") {
         help = "Zone for track timestamps that carry no offset (defaults to this machine's zone)",
     )
 
-    val clockOffsetMinutes: Double by option(
+    val clockOffsetMinutes: Double? by option(
         "--clock-offset",
         help = "Camera clock error in minutes, added to every capture time. " +
-            "Negative if the camera runs fast",
-    ).double().default(0.0)
+            "Negative if the camera runs fast (default: the synced setting, else 0)",
+    ).double()
 
     val builtInOnly: Boolean by option(
         "--builtin",
         help = "Ignore exiftool and use only the built-in writer, reproducing the phone's behaviour",
     ).flag()
 
-    fun captureTimeResolver() = CaptureTimeResolver(
-        exifDateReader = DesktopExifDateReader,
-        assumedZone = zoneOf(photoZone, "--photo-tz"),
-        cameraClockOffset = Duration.ofMillis((clockOffsetMinutes * 60_000).toLong()),
-    )
+    /**
+     * The camera settings the app syncs, when [tracksDir] is the Drive for
+     * Desktop mirror of its folder. They stand in for any option not given.
+     */
+    val shared: CameraSettings by lazy {
+        tracksDir?.let { CameraSettings.read(CameraSettings.fileIn(it)) } ?: CameraSettings()
+    }
 
-    fun tolerance(): Duration = Duration.ofMinutes(toleranceMinutes)
+    fun captureTimeResolver(): CaptureTimeResolver {
+        val offset = clockOffsetMinutes
+            ?: shared[CameraSettings.CLOCK_OFFSET_MINUTES]?.trim()?.toDoubleOrNull()
+            ?: 0.0
+        return CaptureTimeResolver(
+            exifDateReader = DesktopExifDateReader,
+            assumedZone = zoneOf(photoZone ?: shared[CameraSettings.PHOTO_TIME_ZONE], "--photo-tz"),
+            cameraClockOffset = Duration.ofMillis((offset * 60_000).toLong()),
+        )
+    }
+
+    fun tolerance(): Duration = Duration.ofMinutes(
+        toleranceMinutes ?: shared[CameraSettings.TOLERANCE_MINUTES]?.trim()?.toLongOrNull() ?: 30
+    )
 
     /** True when the user asked for geotagging at all. */
     val hasTrackSource get() = tracks.isNotEmpty() || tracksDir != null

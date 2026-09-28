@@ -12,6 +12,7 @@ import com.github.ajalt.clikt.parameters.types.file
 import com.pbungert.geoimport.core.geotag.Geotagger
 import com.pbungert.geoimport.core.geotag.GeotagTarget
 import com.pbungert.geoimport.core.geotag.writeGeotags
+import com.pbungert.geoimport.core.imports.CameraSettings
 import com.pbungert.geoimport.core.imports.ImportPlan
 import com.pbungert.geoimport.core.imports.LastImport
 import com.pbungert.geoimport.core.imports.PhotoImporter
@@ -42,6 +43,13 @@ class ImportCommand : CliktCommand(name = "import") {
             "a filename, or a timestamp like 2026-07-17T14:30",
     )
 
+    private val exclude: String? by option(
+        "--exclude",
+        help = "Comma-separated file types to leave on the card, e.g. jpg,mov " +
+            "(default: the types left out in the app, when --tracks-dir is its synced folder; " +
+            "'--exclude none' takes everything)",
+    )
+
     private val dryRun: Boolean by option(
         "--dry-run", "-n",
         help = "Show what would be copied and tagged without writing anything",
@@ -69,7 +77,9 @@ class ImportCommand : CliktCommand(name = "import") {
             destBasePath = dest,
             captureTime = geotag.captureTimeResolver(),
             log = { if (dryRun) Unit else echo(it) },
+            extensions = PhotoImporter.MEDIA_EXTENSIONS,
             lastImport = stateFile?.let(LastImport::read),
+            excludedTypes = excludedTypes(),
         )
 
         // Which tracks to use is settled inside plan(), once the capture times
@@ -85,7 +95,9 @@ class ImportCommand : CliktCommand(name = "import") {
                 .also { geotagger = it }
         }
 
-        if (plan.isEmpty) {
+        describeTypes(plan)
+
+        if (plan.selected.isEmpty()) {
             echo("Nothing to import.")
             plan.resumeAfter?.let { echo("(resuming after '$it' - no newer files on the card)") }
             return
@@ -148,6 +160,23 @@ class ImportCommand : CliktCommand(name = "import") {
             }
         }
         echo("Nothing was written (--dry-run).")
+    }
+
+    private fun excludedTypes(): Set<String> = when {
+        exclude == null -> geotag.shared.excludedTypes
+        exclude.equals("none", ignoreCase = true) -> emptySet()
+        else -> CameraSettings.parseTypes(exclude!!)
+    }
+
+    /** "RAF 120, MOV 3 - leaving JPG 120 on the card", when anything is left. */
+    private fun describeTypes(plan: ImportPlan) {
+        val (taken, left) = plan.types.partition { it.selected > 0 }
+        if (left.isEmpty()) return
+        echo(
+            taken.joinToString(", ") { "${it.type.uppercase()} ${it.total}" }.ifEmpty { "Nothing" } +
+                " - leaving " + left.joinToString(", ") { "${it.type.uppercase()} ${it.total}" } +
+                " on the card (--exclude none takes them)"
+        )
     }
 
     private fun deviceName(): String =

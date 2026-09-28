@@ -86,7 +86,7 @@ Two corrections, both explicit because both are easy to get silently wrong:
 ## Desktop
 
 ```
-geoimport import <card> --dest <dir> [--track T ...] [--tracks-dir D] [--dry-run] [--resume ...]
+geoimport import <card> --dest <dir> [--track T ...] [--tracks-dir D] [--exclude jpg,...] [--dry-run] [--resume ...]
 geoimport tag <folder> (--track T ... | --tracks-dir D) [--recursive] [--dry-run]
 geoimport tracks pull|list
 ```
