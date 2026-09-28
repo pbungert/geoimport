@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import com.google.android.gms.tasks.Tasks
+import com.pbungert.geoimport.core.imports.CameraSettings
 import com.pbungert.geoimport.core.imports.LastImport
 import com.pbungert.geoimport.core.sync.ConflictPolicy
 import com.pbungert.geoimport.core.sync.DirectoryStore
@@ -117,9 +118,10 @@ class GeoimportSyncWorker(context: Context, params: WorkerParameters) : Worker(c
     }
 
     /**
-     * `State/` beside the tracks, in the Drive folder as on this device. Both
-     * sides changing it is the normal case - an import here while another
-     * device imported too - so the two are merged rather than kept apart.
+     * `State/` beside the tracks, in the Drive folder as on this device: where
+     * the last import stopped, and the camera settings. Both sides changing
+     * them is the normal case - an import here while another device imported
+     * too - so the two versions are merged rather than kept apart.
      */
     private fun syncState(
         context: Context,
@@ -127,14 +129,17 @@ class GeoimportSyncWorker(context: Context, params: WorkerParameters) : Worker(c
         token: String,
         tracksRemote: DriveRemoteStore,
     ): SyncEngine.Report {
-        val file = LastImport.fileIn(tracksDir)
-        val isState = { name: String -> name == LastImport.FILE_NAME }
+        val dir = LastImport.fileIn(tracksDir).parentFile!!
+        val isState = { name: String -> name == LastImport.FILE_NAME || name == CameraSettings.FILE_NAME }
         val engine = SyncEngine(
-            DirectoryStore(file.parentFile!!, isState),
-            DriveRemoteStore(token, file.parentFile!!.name, parentId = tracksRemote.folderId),
+            DirectoryStore(dir, isState),
+            DriveRemoteStore(token, dir.name, parentId = tracksRemote.folderId),
             ConflictPolicy.Merge,
             accepts = isState,
-            merge = LastImport::mergeBytes,
+            merge = { name, local, remote ->
+                if (name == CameraSettings.FILE_NAME) CameraSettings.mergeBytes(local, remote)
+                else LastImport.mergeBytes(local, remote)
+            },
         )
         val indexFile = SyncManager.stateIndexFile(context)
         return engine.sync(SyncIndex.read(indexFile)) { it.write(indexFile) }

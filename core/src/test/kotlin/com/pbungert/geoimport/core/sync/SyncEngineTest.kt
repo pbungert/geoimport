@@ -246,7 +246,7 @@ class SyncEngineTest {
             DirectoryStore(dir, { true }),
             drive,
             ConflictPolicy.Merge,
-            merge = { l, r -> (l.decodeToString() + "+" + r.decodeToString()).toByteArray() },
+            merge = { _, l, r -> (l.decodeToString() + "+" + r.decodeToString()).toByteArray() },
         )
         drive.put("s.json", "remote")
         File(dir, "s.json").writeText("local")
@@ -264,7 +264,7 @@ class SyncEngineTest {
             DirectoryStore(dir, { true }),
             drive,
             ConflictPolicy.Merge,
-            merge = { _, r -> r },
+            merge = { _, _, r -> r },
         )
         val index = SyncIndex()
         drive.put("s.properties", "state")

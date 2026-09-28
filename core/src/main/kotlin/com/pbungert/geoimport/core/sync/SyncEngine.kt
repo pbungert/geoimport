@@ -5,15 +5,15 @@ package com.pbungert.geoimport.core.sync
  *
  * [accepts] decides which remote files take part, the same way the local
  * store decides for its own: a stray photo dropped into the Drive folder is
- * not a track and does not come down. [merge] combines two versions of a file
- * and is required under [ConflictPolicy.Merge].
+ * not a track and does not come down. [merge] combines two versions of the
+ * file it is given the name of, and is required under [ConflictPolicy.Merge].
  */
 class SyncEngine(
     private val local: LocalStore,
     private val remote: RemoteStore,
     private val policy: ConflictPolicy,
     private val accepts: (String) -> Boolean = { true },
-    private val merge: ((local: ByteArray, remote: ByteArray) -> ByteArray)? = null,
+    private val merge: ((name: String, local: ByteArray, remote: ByteArray) -> ByteArray)? = null,
 ) {
     init {
         require(policy != ConflictPolicy.Merge || merge != null) { "Merge policy needs a merge function" }
@@ -84,7 +84,7 @@ class SyncEngine(
                 downloaded += action.name
             }
             is SyncAction.Merge -> {
-                val merged = merge!!(local.read(action.name), remote.download(action.remoteId))
+                val merged = merge!!(action.name, local.read(action.name), remote.download(action.remoteId))
                 local.write(action.name, merged)
                 remote.update(action.remoteId, merged)
                 index.record(action.name, action.remoteId, md5Hex(merged))
