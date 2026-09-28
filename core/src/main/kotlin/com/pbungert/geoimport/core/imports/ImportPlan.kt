@@ -37,6 +37,25 @@ data class ImportPlan(
      */
     val acrossWideGap get() = selected.count { (it.gapMeters ?: 0.0) >= WIDE_GAP_METERS }
 
+    /** How many files of one type the plan holds, and how many of them are picked. */
+    data class TypeCount(val type: String, val total: Int, val selected: Int)
+
+    /**
+     * The file types on offer, most files first, by extension in lower case -
+     * what the preview offers to include or leave out.
+     */
+    val types: List<TypeCount>
+        get() = entries.groupBy { it.source.extension.lowercase() }
+            .map { (type, files) -> TypeCount(type, files.size, files.count { it.selected }) }
+            .sortedWith(compareByDescending<TypeCount> { it.total }.thenBy { it.type })
+
+    /** A copy with every file of [type] picked, or none of them. */
+    fun withType(type: String, selected: Boolean) = copy(
+        entries = entries.map {
+            if (it.source.extension.equals(type, ignoreCase = true)) it.copy(selected = selected) else it
+        },
+    )
+
     companion object {
         const val WIDE_GAP_METERS = 500.0
     }

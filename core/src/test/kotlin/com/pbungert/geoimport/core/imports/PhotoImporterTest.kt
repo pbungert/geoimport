@@ -25,7 +25,10 @@ class PhotoImporterTest {
     private fun importer(
         extensions: Set<String> = PhotoImporter.DEFAULT_EXTENSIONS,
         lastImport: LastImport? = null,
-    ) = PhotoImporter(source, dest, CaptureTimeResolver(noExif), { log.add(it) }, extensions, lastImport)
+        excludedTypes: Set<String> = emptySet(),
+    ) = PhotoImporter(
+        source, dest, CaptureTimeResolver(noExif), { log.add(it) }, extensions, lastImport, excludedTypes,
+    )
 
     /** Where an import on another device stopped. */
     private fun elsewhere(lastFile: String, importNumber: Int) =
@@ -297,5 +300,53 @@ class PhotoImporterTest {
         val at = Instant.parse("2026-09-27T12:00:00Z")
 
         assertEquals(LastImport("DSCF0002.RAF", 1, at, "Tablet"), importer.lastImportOf(result, "Tablet", at))
+    }
+
+    // --- choosing file types ----------------------------------------------
+
+    @Test
+    fun excludedTypesArePlannedButNotPicked() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0001.JPG", "DSCF0002.RAF", "DSCF0002.JPG", "DSCF0003.MOV")
+
+        val plan = importer(excludedTypes = setOf("jpg")).plan(null, null)
+
+        assertEquals(
+            listOf(
+                ImportPlan.TypeCount("jpg", 2, 0),
+                ImportPlan.TypeCount("raf", 2, 2),
+                ImportPlan.TypeCount("mov", 1, 1),
+            ),
+            plan.types,
+        )
+        assertEquals(listOf("DSCF0001.RAF", "DSCF0002.RAF", "DSCF0003.MOV"), plan.selected.map { it.source.name })
+    }
+
+    @Test
+    fun aTypeCanBePickedBackForOneImport() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0001.JPG")
+
+        val plan = importer(excludedTypes = setOf("jpg")).plan(null, null).withType("JPG", true)
+
+        assertEquals(2, plan.selected.size)
+    }
+
+    @Test
+    fun theResumePointIgnoresWhichTypesAreExcluded() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0001.JPG", "DSCF0002.RAF", "DSCF0002.JPG")
+        importFolder(1, "DSCF0001.RAF")
+
+        val plan = importer(excludedTypes = setOf("jpg")).plan(null, null)
+
+        assertEquals(listOf("DSCF0002.JPG", "DSCF0002.RAF"), plan.entries.map { it.source.name })
+        assertEquals(listOf("DSCF0002.RAF"), plan.selected.map { it.source.name })
+    }
+
+    @Test
+    fun mediaTypesLeaveTheCamerasOwnFilesOnTheCard() {
+        setUpCard("101_FUJI", "DSCF0001.CR3", "DSCF0001.THM", "DSCF0002.HEIC")
+
+        val plan = importer(extensions = PhotoImporter.MEDIA_EXTENSIONS).plan(null, null)
+
+        assertEquals(listOf("DSCF0001.CR3", "DSCF0002.HEIC"), plan.entries.map { it.source.name })
     }
 }

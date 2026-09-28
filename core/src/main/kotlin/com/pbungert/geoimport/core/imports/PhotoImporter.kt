@@ -17,6 +17,9 @@ import kotlin.math.pow
  * [lastImport] is where the last import on any device stopped, when imports
  * are shared between devices. It can move the resume point forward and the
  * folder number up, never back.
+ *
+ * Files of a type in [excludedTypes] are still planned, so the preview can
+ * show them, but start out deselected and are not copied unless picked.
  */
 class PhotoImporter(
     private val sourcePath: File,
@@ -25,6 +28,7 @@ class PhotoImporter(
     private val log: (String) -> Unit,
     private val extensions: Set<String> = DEFAULT_EXTENSIONS,
     private val lastImport: LastImport? = null,
+    private val excludedTypes: Set<String> = emptySet(),
 ) {
     /**
      * [copies] pairs each copy with the entry it was made from. That pairing is
@@ -92,6 +96,7 @@ class PhotoImporter(
                 fix = fix,
                 gapMeters = resolved?.gapMeters,
                 writer = if (fix == null) null else writer?.effectiveWriterFor(file)?.name,
+                selected = file.extension.lowercase() !in excludedTypes,
             )
         }
         return ImportPlan(sourcePath, destFolder, resolvedFilename, entries)
@@ -306,6 +311,21 @@ class PhotoImporter(
          * embed into still imports and gets an XMP sidecar.
          */
         val DEFAULT_EXTENSIONS = setOf("raf", "jpg", "jpeg", "mov", "mp4")
+
+        /**
+         * Every photo and video format a camera card is likely to hold, for an
+         * import that lets the user leave types out rather than naming the ones
+         * to take. The camera's own clutter - thumbnails, database files - is
+         * not in here, so it never shows up as a type to choose.
+         */
+        val MEDIA_EXTENSIONS = DEFAULT_EXTENSIONS + setOf(
+            // Raw formats: Canon, Nikon, Sony, Adobe, Olympus/OM, Panasonic,
+            // Pentax, Samsung, Leica, Hasselblad.
+            "cr2", "cr3", "nef", "nrw", "arw", "srf", "sr2", "dng", "orf", "rw2", "pef",
+            "srw", "rwl", "3fr",
+            "heic", "heif", "hif", "tif", "tiff",
+            "mts", "m2ts", "avi", "mkv",
+        )
 
         /** Counts per extension, e.g. "12 RAF, 3 MOV" — no format is hardcoded. */
         fun describe(files: List<File>): String {
