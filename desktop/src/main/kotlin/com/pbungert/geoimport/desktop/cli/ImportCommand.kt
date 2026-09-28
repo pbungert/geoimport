@@ -13,10 +13,13 @@ import com.pbungert.geoimport.core.geotag.Geotagger
 import com.pbungert.geoimport.core.geotag.GeotagTarget
 import com.pbungert.geoimport.core.geotag.writeGeotags
 import com.pbungert.geoimport.core.imports.ImportPlan
+import com.pbungert.geoimport.core.imports.LastImport
 import com.pbungert.geoimport.core.imports.PhotoImporter
 import com.pbungert.geoimport.core.imports.parseResumeTimestamp
 import com.pbungert.geoimport.core.track.TrackSelection
 import java.io.File
+import java.net.InetAddress
+import java.time.Instant
 
 class ImportCommand : CliktCommand(name = "import") {
 
@@ -57,11 +60,16 @@ class ImportCommand : CliktCommand(name = "import") {
             echo("  ${w.name} failed on ${file.name} (${e.message ?: e}) - falling back", err = true)
         }
 
+        // Shared with the app through the Drive for Desktop mirror of the
+        // tracks folder. Only a state file the app created is used: with the
+        // drive.file scope the app cannot see one that Drive for Desktop made.
+        val stateFile = geotag.tracksDir?.let(LastImport::fileIn)?.takeIf { it.isFile }
         val importer = PhotoImporter(
             sourcePath = dcim,
             destBasePath = dest,
             captureTime = geotag.captureTimeResolver(),
             log = { if (dryRun) Unit else echo(it) },
+            lastImport = stateFile?.let(LastImport::read),
         )
 
         // Which tracks to use is settled inside plan(), once the capture times
@@ -90,6 +98,12 @@ class ImportCommand : CliktCommand(name = "import") {
 
         val result = importer.execute(plan) { done, total, _ ->
             if (done == total) echo("Copied $done of $total files.")
+        }
+        if (stateFile != null) {
+            importer.lastImportOf(result, deviceName(), Instant.now())?.let { state ->
+                LastImport.record(state, stateFile)
+                echo("Saved where this import stopped, for the other devices.")
+            }
         }
 
         if (geotagger == null) return
@@ -135,6 +149,9 @@ class ImportCommand : CliktCommand(name = "import") {
         }
         echo("Nothing was written (--dry-run).")
     }
+
+    private fun deviceName(): String =
+        runCatching { InetAddress.getLocalHost().hostName }.getOrNull()?.ifBlank { null } ?: "PC"
 
     /** `auto` / null means the watermark; otherwise a filename or a timestamp. */
     private fun parseResume(value: String?) = when {

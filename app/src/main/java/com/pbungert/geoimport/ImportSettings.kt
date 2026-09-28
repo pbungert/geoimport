@@ -321,7 +321,8 @@ private fun ResumeEditor(
         }
         when (mode) {
             ResumeMode.Auto -> Text(
-                "Continues after the newest photo in the last \"Import NN\" folder.",
+                "Continues after the newest photo in the last \"Import NN\" folder, or " +
+                    "after an import on another device that got further on this card.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

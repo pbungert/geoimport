@@ -7,12 +7,14 @@ import android.util.Log
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import com.google.android.gms.tasks.Tasks
+import com.pbungert.geoimport.core.imports.LastImport
 import com.pbungert.geoimport.core.sync.ConflictPolicy
 import com.pbungert.geoimport.core.sync.DirectoryStore
 import com.pbungert.geoimport.core.sync.SyncEngine
 import com.pbungert.geoimport.core.sync.SyncIndex
 import com.pbungert.geoimport.core.track.TrackParser
 import com.pbungert.geoimport.recorder.TrackRecorderService
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -56,7 +58,7 @@ class GeoimportSyncWorker(context: Context, params: WorkerParameters) : Worker(c
         }
 
         return try {
-            val report = syncTracks(context, token)
+            val report = syncAll(context, token)
             Log.i(
                 TAG,
                 "Synced: ${report.uploaded.size} up, ${report.downloaded.size} down, " +
@@ -79,16 +81,29 @@ class GeoimportSyncWorker(context: Context, params: WorkerParameters) : Worker(c
         }
     }
 
-    private fun syncTracks(context: Context, token: String): SyncEngine.Report {
+    /** The tracks, then where the last import stopped. */
+    private fun syncAll(context: Context, token: String): SyncEngine.Report {
         TrackRecorderService.migrateLegacyTracksDir(context)
         val dir = TrackRecorderService.tracksDir()
+        val tracksRemote = DriveRemoteStore(token, SyncManager.DRIVE_FOLDER)
+        val tracks = syncTracks(context, dir, tracksRemote)
+        val state = syncState(context, dir, token, tracksRemote)
+        return SyncEngine.Report(
+            uploaded = tracks.uploaded + state.uploaded,
+            downloaded = tracks.downloaded + state.downloaded,
+            renamed = tracks.renamed + state.renamed,
+            failures = tracks.failures + state.failures,
+        )
+    }
+
+    private fun syncTracks(context: Context, dir: File, remote: DriveRemoteStore): SyncEngine.Report {
         val isTrack = { name: String -> name.substringAfterLast('.', "").lowercase() in TrackParser.EXTENSIONS }
         val local = DirectoryStore(dir, isTrack) { file ->
             MediaScannerConnection.scanFile(context, arrayOf(file.path), null, null)
         }
         val engine = SyncEngine(
             local,
-            DriveRemoteStore(token, SyncManager.DRIVE_FOLDER),
+            remote,
             ConflictPolicy.KeepBoth,
             accepts = isTrack,
         )
@@ -99,6 +114,30 @@ class GeoimportSyncWorker(context: Context, params: WorkerParameters) : Worker(c
         val index = if (dir.isDirectory) SyncIndex.read(indexFile) else SyncIndex()
         val skip = TrackRecorderService.activeFileName(context)?.let(::setOf).orEmpty()
         return engine.sync(index, skip) { it.write(indexFile) }
+    }
+
+    /**
+     * `State/` beside the tracks, in the Drive folder as on this device. Both
+     * sides changing it is the normal case - an import here while another
+     * device imported too - so the two are merged rather than kept apart.
+     */
+    private fun syncState(
+        context: Context,
+        tracksDir: File,
+        token: String,
+        tracksRemote: DriveRemoteStore,
+    ): SyncEngine.Report {
+        val file = LastImport.fileIn(tracksDir)
+        val isState = { name: String -> name == LastImport.FILE_NAME }
+        val engine = SyncEngine(
+            DirectoryStore(file.parentFile!!, isState),
+            DriveRemoteStore(token, file.parentFile!!.name, parentId = tracksRemote.folderId),
+            ConflictPolicy.Merge,
+            accepts = isState,
+            merge = LastImport::mergeBytes,
+        )
+        val indexFile = SyncManager.stateIndexFile(context)
+        return engine.sync(SyncIndex.read(indexFile)) { it.write(indexFile) }
     }
 
     private companion object {

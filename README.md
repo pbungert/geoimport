@@ -137,10 +137,23 @@ network:
 - **A track is uploaded once it's finished.** The one still being recorded is
   left out of every sync.
 
+Where the last import stopped is synced too, in `State/last-import.properties`
+inside the tracks folder. It holds the last photo copied, its `Import NN`
+number, and which device ran the import. An import on the tablet then
+continues after what the PC already copied, and the next folder is numbered
+above both.
+- **Auto resume point:** the shared one is used only if that photo is on the
+  card and came later than this device's own last import.
+- **Both devices imported:** the later photo and the higher number win.
+- **An explicit start filename or time** still overrides both.
+
 The app uses the `drive.file` scope, so it sees only files it created. On a
 PC, Google Drive for Desktop mirrors the folder, and
-`--tracks-dir "G:\My Drive\Geoimport"` reads it like any other folder. Without
-Drive, `geoimport tracks pull` still copies tracks over adb.
+`--tracks-dir "G:\My Drive\Geoimport"` reads it like any other folder,
+state included. Files created on the PC stay invisible to the app, though.
+So a GPX dropped into that folder does not reach the phone, and the CLI only
+updates the state file once the app has created it. Without Drive,
+`geoimport tracks pull` still copies tracks over adb.
 
 One-time Google Cloud setup, done by whoever builds the APK:
 

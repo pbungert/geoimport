@@ -13,6 +13,10 @@ import kotlin.math.pow
  * NNN_FUJI folders on the card, skips everything up to the last imported file
  * (or an explicit start filename/timestamp) and copies the rest into the next
  * "Import NN" folder below [destBasePath].
+ *
+ * [lastImport] is where the last import on any device stopped, when imports
+ * are shared between devices. It can move the resume point forward and the
+ * folder number up, never back.
  */
 class PhotoImporter(
     private val sourcePath: File,
@@ -20,6 +24,7 @@ class PhotoImporter(
     private val captureTime: CaptureTimeResolver,
     private val log: (String) -> Unit,
     private val extensions: Set<String> = DEFAULT_EXTENSIONS,
+    private val lastImport: LastImport? = null,
 ) {
     /**
      * [copies] pairs each copy with the entry it was made from. That pairing is
@@ -58,13 +63,17 @@ class PhotoImporter(
         writer: GpsWriter? = null,
         geotaggerFor: (captureTimes: List<Instant>) -> Geotagger? = { null },
     ): ImportPlan {
-        val destFolder = File(destBasePath, importFolderName(findHighestImportNumber() + 1))
+        // Numbered above every folder here and every one another device made,
+        // so the same Import NN never holds two different imports.
+        val nextNumber = maxOf(findHighestImportNumber(), lastImport?.importNumber ?: 0) + 1
+        val destFolder = File(destBasePath, importFolderName(nextNumber))
         val sourceFiles = collectSourceFiles(sourcePath)
             ?: return ImportPlan(sourcePath, destFolder, null, emptyList())
 
         log("Found ${describe(sourceFiles)}.")
 
-        val (resolvedFilename, resolvedTimestamp) = resolveStartCriteria(startFilename, startTimestamp)
+        val (resolvedFilename, resolvedTimestamp) =
+            resolveStartCriteria(startFilename, startTimestamp, sourceFiles)
         val filesToCopy = filterNewFiles(sourceFiles, resolvedFilename, resolvedTimestamp)
         log("After filtering, ${filesToCopy.size} files will be copied.")
 
@@ -144,6 +153,7 @@ class PhotoImporter(
     private fun resolveStartCriteria(
         startFilename: String?,
         startTimestamp: LocalDateTime?,
+        sourceFiles: List<File>,
     ): Pair<String?, LocalDateTime?> {
         if (startTimestamp != null) {
             log("Starting from timestamp: $startTimestamp")
@@ -154,25 +164,53 @@ class PhotoImporter(
             return startFilename to null
         }
 
-        val highestNumber = findHighestImportNumber()
-        if (highestNumber > 0) {
-            val lastFolder = File(destBasePath, importFolderName(highestNumber))
-            // Only importable files may become the watermark. Geotagging
-            // leaves .xmp sidecars in this folder, and a sidecar shares its
-            // sequence number with the photo it belongs to — so picking one
-            // would yield a name that matches nothing on the card, leaving
-            // `started` false in filterNewFiles and silently importing zero
-            // files on every subsequent run.
-            val lastFile = sortByFilenameChronological(
-                lastFolder.listFiles()?.filter { it.isFile && isImportable(it) } ?: emptyList()
-            ).lastOrNull()
-            if (lastFile != null) {
-                log("Starting after '${lastFile.name}' from '${lastFolder.path}'")
-                return lastFile.name to null
-            }
+        val local = localWatermark()
+        val shared = sharedWatermark(sourceFiles)
+        if (shared != null && (local == null || LastImport.isLater(shared.lastFile, than = local.name))) {
+            log(
+                "Starting after '${shared.lastFile}', where the import on ${shared.device} " +
+                    "into ${importFolderName(shared.importNumber)} stopped"
+            )
+            return shared.lastFile to null
         }
-
+        if (local != null) {
+            log("Starting after '${local.name}' from '${local.parentFile.path}'")
+            return local.name to null
+        }
         return null to null
+    }
+
+    /** The last photo of the newest Import NN folder on this device. */
+    private fun localWatermark(): File? {
+        val highestNumber = findHighestImportNumber()
+        if (highestNumber == 0) return null
+        val lastFolder = File(destBasePath, importFolderName(highestNumber))
+        // Only importable files may become the watermark. Geotagging
+        // leaves .xmp sidecars in this folder, and a sidecar shares its
+        // sequence number with the photo it belongs to — so picking one
+        // would yield a name that matches nothing on the card, leaving
+        // `started` false in filterNewFiles and silently importing zero
+        // files on every subsequent run.
+        return sortByFilenameChronological(
+            lastFolder.listFiles()?.filter { it.isFile && isImportable(it) } ?: emptyList()
+        ).lastOrNull()
+    }
+
+    /**
+     * [lastImport], when this card is the one it came from. A resume point that
+     * is not on the card matches nothing, and would import nothing at all - an
+     * import on another device may well have been from another card.
+     */
+    private fun sharedWatermark(sourceFiles: List<File>): LastImport? {
+        val shared = lastImport ?: return null
+        if (sourceFiles.none { it.name.equals(shared.lastFile, ignoreCase = true) }) {
+            log(
+                "The last import on ${shared.device} stopped after '${shared.lastFile}', " +
+                    "which is not on this card - not resuming from it."
+            )
+            return null
+        }
+        return shared
     }
 
     private fun filterNewFiles(
@@ -242,6 +280,19 @@ class PhotoImporter(
     }
 
     private fun importFolderName(number: Int) = "Import %02d".format(number)
+
+    /**
+     * What an import that produced [result] leaves for the next one, on this
+     * device or another: its last photo and its folder. Null when nothing that
+     * could be resumed from was copied.
+     */
+    fun lastImportOf(result: ImportResult, device: String, at: Instant): LastImport? {
+        val folder = result.destFolder ?: return null
+        val number = folder.name.removePrefix("Import ").toIntOrNull() ?: return null
+        val last = sortByFilenameChronological(result.copied.filter(::isImportable)).lastOrNull()
+            ?: return null
+        return LastImport(last.name, number, at, device)
+    }
 
     companion object {
         /**

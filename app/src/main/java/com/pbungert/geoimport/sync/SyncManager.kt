@@ -97,7 +97,10 @@ object SyncManager {
             .remove(KEY_LAST_ERROR)
             .apply()
         // Another account's Drive knows nothing of what this index says.
-        if (switched) indexFile(context).delete()
+        if (switched) {
+            indexFile(context).delete()
+            stateIndexFile(context).delete()
+        }
         _status.update { it.copy(account = account, needsSignIn = false, lastError = null) }
         schedule(context)
         syncNow(context)
@@ -109,6 +112,7 @@ object SyncManager {
         WorkManager.getInstance(context).cancelUniqueWork(WORK_NOW)
         prefs(context).edit().clear().apply()
         indexFile(context).delete()
+        stateIndexFile(context).delete()
         _status.value = SyncStatus(localChanges = _status.value.localChanges)
     }
 
@@ -143,6 +147,8 @@ object SyncManager {
     fun knownTrackNames(context: Context): Set<String> = SyncIndex.read(indexFile(context)).names
 
     internal fun indexFile(context: Context) = File(context.filesDir, "sync/tracks.index")
+
+    internal fun stateIndexFile(context: Context) = File(context.filesDir, "sync/state.index")
 
     internal fun started() = _status.update { it.copy(running = true) }
 

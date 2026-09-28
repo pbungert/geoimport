@@ -7,6 +7,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.time.Instant
 import java.time.LocalDateTime
 
 class PhotoImporterTest {
@@ -21,8 +22,14 @@ class PhotoImporterTest {
     private lateinit var dest: File
     private val log = mutableListOf<String>()
 
-    private fun importer(extensions: Set<String> = PhotoImporter.DEFAULT_EXTENSIONS) =
-        PhotoImporter(source, dest, CaptureTimeResolver(noExif), { log.add(it) }, extensions)
+    private fun importer(
+        extensions: Set<String> = PhotoImporter.DEFAULT_EXTENSIONS,
+        lastImport: LastImport? = null,
+    ) = PhotoImporter(source, dest, CaptureTimeResolver(noExif), { log.add(it) }, extensions, lastImport)
+
+    /** Where an import on another device stopped. */
+    private fun elsewhere(lastFile: String, importNumber: Int) =
+        LastImport(lastFile, importNumber, Instant.parse("2026-09-27T12:00:00Z"), "PC")
 
     private fun setUpCard(folder: String, vararg names: String) {
         source = File(tmp.root, "DCIM").also { it.mkdirs() }
@@ -230,5 +237,65 @@ class PhotoImporterTest {
     fun singleFileNeedsNoRotation() {
         assertEquals(listOf("DSCF0042.RAF"), sorted("DSCF0042.RAF"))
         assertEquals(emptyList<String>(), sorted())
+    }
+
+    // --- imports shared between devices -----------------------------------
+
+    @Test
+    fun continuesAfterAnImportOnAnotherDeviceThatGotFurther() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0002.RAF", "DSCF0003.RAF", "DSCF0004.RAF")
+        importFolder(1, "DSCF0001.RAF")
+
+        val result = importer(lastImport = elsewhere("DSCF0003.RAF", 2))
+            .run(startFilename = null, startTimestamp = null)
+
+        assertEquals(listOf("DSCF0004.RAF"), result.copied.map { it.name })
+        assertEquals("Import 03", result.destFolder!!.name)
+    }
+
+    @Test
+    fun keepsItsOwnResumePointWhenItGotFurtherThanTheOtherDevice() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0002.RAF", "DSCF0003.RAF")
+        importFolder(4, "DSCF0002.RAF")
+
+        val result = importer(lastImport = elsewhere("DSCF0001.RAF", 2))
+            .run(startFilename = null, startTimestamp = null)
+
+        assertEquals(listOf("DSCF0003.RAF"), result.copied.map { it.name })
+        assertEquals("Import 05", result.destFolder!!.name)
+    }
+
+    @Test
+    fun ignoresAResumePointThatIsNotOnThisCard() {
+        // Another card, or this one after formatting: resuming from a name
+        // that is not here would import nothing at all.
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0002.RAF")
+
+        val result = importer(lastImport = elsewhere("DSCF0900.RAF", 1))
+            .run(startFilename = null, startTimestamp = null)
+
+        assertEquals(listOf("DSCF0001.RAF", "DSCF0002.RAF"), result.copied.map { it.name })
+        assertEquals("Import 02", result.destFolder!!.name)
+        assertTrue(log.any { it.contains("not on this card") })
+    }
+
+    @Test
+    fun anExplicitStartOverridesTheSharedResumePoint() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0002.RAF", "DSCF0003.RAF")
+
+        val result = importer(lastImport = elsewhere("DSCF0002.RAF", 1))
+            .run(startFilename = "DSCF0001.RAF", startTimestamp = null)
+
+        assertEquals(listOf("DSCF0002.RAF", "DSCF0003.RAF"), result.copied.map { it.name })
+    }
+
+    @Test
+    fun describesAFinishedImportForTheNextOne() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0001.JPG", "DSCF0002.RAF")
+        val importer = importer()
+        val result = importer.run(startFilename = null, startTimestamp = null)
+        val at = Instant.parse("2026-09-27T12:00:00Z")
+
+        assertEquals(LastImport("DSCF0002.RAF", 1, at, "Tablet"), importer.lastImportOf(result, "Tablet", at))
     }
 }

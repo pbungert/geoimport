@@ -21,7 +21,8 @@ class DriveAuthException(message: String) : IOException(message)
  * at the same moment can each create one; the oldest wins, and the other's
  * files go back up into it on that device's next sync.
  *
- * [parentId] is null for a folder at the top of My Drive.
+ * [parentId] is null for a folder at the top of My Drive. The folder is only
+ * created once there is something to put in it.
  */
 class DriveRemoteStore(
     private val token: String,
@@ -29,9 +30,14 @@ class DriveRemoteStore(
     private val parentId: String? = null,
 ) : RemoteStore {
 
-    val folderId: String by lazy { findFolder() ?: createFolder() }
+    private var folder: String? = null
+
+    /** The folder, created if need be. */
+    val folderId: String
+        get() = folder ?: (findFolder() ?: createFolder()).also { folder = it }
 
     override fun list(): List<RemoteFile> {
+        val folderId = folder ?: findFolder()?.also { folder = it } ?: return emptyList()
         val files = mutableListOf<RemoteFile>()
         var page: String? = null
         do {

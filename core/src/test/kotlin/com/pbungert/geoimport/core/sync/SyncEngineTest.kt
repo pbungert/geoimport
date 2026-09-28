@@ -258,6 +258,26 @@ class SyncEngineTest {
     }
 
     @Test
+    fun stateMissingHereIsFetchedAgainRatherThanRememberedAsDeleted() {
+        val dir = tmp.newFolder("state")
+        val engine = SyncEngine(
+            DirectoryStore(dir, { true }),
+            drive,
+            ConflictPolicy.Merge,
+            merge = { _, r -> r },
+        )
+        val index = SyncIndex()
+        drive.put("s.properties", "state")
+        engine.sync(index)
+        File(dir, "s.properties").delete()
+
+        engine.sync(index)
+
+        assertEquals("state", File(dir, "s.properties").readText())
+        assertTrue(index.deleted.isEmpty())
+    }
+
+    @Test
     fun theIndexSurvivesARoundTrip() {
         val index = SyncIndex()
         index.synced["a b.gpx"] = SyncIndex.Entry("id1", "md5")

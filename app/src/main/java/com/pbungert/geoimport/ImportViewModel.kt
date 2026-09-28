@@ -5,11 +5,13 @@ import android.content.Context
 import android.content.Intent
 import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.os.storage.StorageManager
 import android.os.storage.StorageVolume
 import android.util.Log
 import android.provider.OpenableColumns
+import android.provider.Settings
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -25,6 +27,7 @@ import com.pbungert.geoimport.core.geotag.writeGeotags
 import com.pbungert.geoimport.core.geotag.XmpSidecarWriter
 import com.pbungert.geoimport.core.imports.CaptureTimeResolver
 import com.pbungert.geoimport.core.imports.ImportPlan
+import com.pbungert.geoimport.core.imports.LastImport
 import com.pbungert.geoimport.core.imports.PlannedFile
 import com.pbungert.geoimport.core.imports.PhotoImporter
 import com.pbungert.geoimport.core.imports.parseResumeTimestamp
@@ -530,7 +533,10 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val destBase = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
 
         val captureTime = CaptureTimeResolver(AndroidExifDateReader, assumedZone, cameraClockOffset)
-        val importer = PhotoImporter(source, destBase, captureTime, ::log)
+        val lastImport = LastImport.read(LastImport.fileIn(TrackRecorderService.tracksDir()))
+        val importer = PhotoImporter(
+            source, destBase, captureTime, ::log, lastImport = lastImport,
+        )
         // The track is picked here rather than up front: which recordings are
         // worth matching against only becomes answerable once the photos on the
         // card have been read.
@@ -624,6 +630,12 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             app, result.copied.map { it.path }.toTypedArray(), null, null
         )
         log("Import complete! ${result.copied.size} files in '${result.destFolder?.name}'.")
+        // Where this import stopped, for the next one here or on another device.
+        context.importer.lastImportOf(result, deviceName(), Instant.now())?.let { state ->
+            runCatching { LastImport.record(state, LastImport.fileIn(TrackRecorderService.tracksDir())) }
+                .onFailure { log("Could not save where this import stopped: ${it.message}") }
+            SyncManager.syncNow(app)
+        }
         pendingContext = null
         importJob.post(
             Phase.Done(
@@ -783,6 +795,12 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             ?.use { cursor ->
                 if (cursor.moveToFirst()) cursor.getString(0) else null
             }
+
+    /** The name the user gave this device, as another device's log shows it. */
+    private fun deviceName(): String =
+        Settings.Global.getString(getApplication<Application>().contentResolver, Settings.Global.DEVICE_NAME)
+            ?.ifBlank { null }
+            ?: Build.MODEL
 
     private companion object {
         const val PREFS = "importer"

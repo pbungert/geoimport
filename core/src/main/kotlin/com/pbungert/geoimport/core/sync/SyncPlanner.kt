@@ -33,7 +33,11 @@ enum class ConflictPolicy {
      */
     KeepBoth,
 
-    /** The two versions are combined, for state that has a sensible union. */
+    /**
+     * The two versions are combined, for state that has a sensible union.
+     * State is not something to delete, so a file missing here is fetched
+     * again rather than remembered as deleted.
+     */
     Merge,
 }
 
@@ -134,7 +138,7 @@ object SyncPlanner {
                 l != null -> listOf(SyncAction.Upload(name))
                 r != null -> when {
                     name in index.deleted -> emptyList()
-                    last != null -> listOf(SyncAction.Forget(name))
+                    last != null && policy == ConflictPolicy.KeepBoth -> listOf(SyncAction.Forget(name))
                     else -> listOf(SyncAction.Download(r.id, name))
                 }
                 else -> listOf(SyncAction.Prune(name))
