@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Geoimport</title>
+<meta name="description" content="Imports photos off a camera card and places them on the GPS tracks your phone recorded.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<h1>Geoimport</h1>
+<p class="summary">Imports photos off a camera card and places them on the GPS
+tracks your phone recorded. It runs as an Android app, and on Windows, macOS
+and Linux from the command line.</p>
+
+<h2>What it does</h2>
+<ul>
+<li><strong>Records GPS tracks</strong> on your phone while you take photos
+with a camera that has no GPS of its own.</li>
+<li><strong>Imports new photos</strong> from the camera's memory card, picking
+up after the last photo it imported. You choose which file types to take,
+such as RAW, JPEG or video.</li>
+<li><strong>Adds the position</strong> to each photo from the track that covers
+the time it was taken. RAF, JPEG and MOV/MP4 get the position in the file
+itself; other formats get an XMP sidecar file.</li>
+<li><strong>Syncs between your devices</strong> if you want it to. Record on
+your phone, import on your tablet: tracks and import settings are kept in a
+folder in your own Google Drive.</li>
+</ul>
+
+<h2>Google Drive</h2>
+<p>Sync is optional and off until you sign in. The app only asks for access to
+the files it creates itself. It cannot see anything else in your Drive, and
+the data never passes through a server of ours. There is none. See the
+<a href="privacy.html">privacy policy</a> for the details.</p>
+
+<footer>
+<a href="privacy.html">Privacy policy</a> ·
+<a href="gpx/1/">GPX extension</a> ·
+<a href="https://github.com/pbungert/geoimport">Source code</a> (MIT)
+</footer>
+</main>
+</body>
+</html>

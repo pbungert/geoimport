@@ -178,7 +178,10 @@ One-time Google Cloud setup, done by whoever builds the APK:
    `.../auth/drive.file`. Then **publish it to production**. In *Testing*
    mode, access expires after 7 days, and every user has to be added as a
    test user. `drive.file` is a non-sensitive scope, so publishing needs no
-   verification.
+   verification. It does need the Branding page filled in:
+   - home page `https://pbungert.github.io/geoimport/`
+   - privacy policy `https://pbungert.github.io/geoimport/privacy.html`
+   - authorized domain `pbungert.github.io`
 3. Create an OAuth client of type **Android** for each key that signs an APK
    you install, with the package `com.pbungert.geoimport` and that key's
    SHA-1:
@@ -191,6 +194,16 @@ One-time Google Cloud setup, done by whoever builds the APK:
 
 No client ID goes into the code. Play services matches the app to the client
 by its package and signature. Devices need Google Play services.
+
+## Website
+
+`docs/` is served by GitHub Pages at <https://pbungert.github.io/geoimport/>:
+- the home page;
+- the privacy policy the Google sign-in links to;
+- the page for the GPX extension namespace that recorded tracks declare.
+
+Keep the privacy policy in step with the app. If the app starts sending
+anything anywhere new, the policy has to say so.
 
 ## Tests
 

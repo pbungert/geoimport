@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Geoimport GPX Extension</title>
+<meta name="description" content="The extension elements Geoimport writes into GPX track points: fix accuracy, speed and source.">
+<link rel="stylesheet" href="../../style.css">
+</head>
+<body>
+<main>
+<p class="back"><a href="../../">Geoimport</a></p>
+<h1>GPX extension, version 1</h1>
+<p class="meta">Namespace <code>https://pbungert.github.io/geoimport/gpx/1</code></p>
+
+<p class="summary">Tracks recorded by Geoimport are plain GPX 1.1. Each track
+point also carries what the receiver reported about its own fix, so a later
+pass can judge the track from the file alone.</p>
+
+<p>The elements sit in the point's <code>&lt;extensions&gt;</code>. Readers that
+do not know the namespace skip them, and the track stays valid GPX. Each
+element is optional and left out when the receiver did not report it.</p>
+
+<h2>Elements</h2>
+<ul>
+<li><code>acc</code>: horizontal accuracy in metres. It's the radius within
+which the true position lies with 68% probability.</li>
+<li><code>eleacc</code>: vertical accuracy of <code>&lt;ele&gt;</code> in metres,
+including the error of the sea-level model.</li>
+<li><code>speed</code>: speed over ground in metres per second. It's not GPX
+1.0's <code>&lt;speed&gt;</code>, which is why it lives here.</li>
+<li><code>src</code>: where the fix came from: <code>gps</code> for satellite
+positioning, or <code>fused</code> for the phone's combined location from
+satellites, Wi-Fi and cell towers.</li>
+</ul>
+
+<h2>Example</h2>
+<pre><code>&lt;gpx version="1.1" creator="Geoimport"
+     xmlns="http://www.topografix.com/GPX/1/1"
+     xmlns:geoimport="https://pbungert.github.io/geoimport/gpx/1"&gt;
+ &lt;trk&gt;&lt;trkseg&gt;
+  &lt;trkpt lat="46.6863481" lon="7.8632150"&gt;
+   &lt;ele&gt;566.3&lt;/ele&gt;
+   &lt;time&gt;2026-09-20T09:14:02Z&lt;/time&gt;
+   &lt;extensions&gt;
+    &lt;geoimport:acc&gt;4.2&lt;/geoimport:acc&gt;
+    &lt;geoimport:eleacc&gt;6.1&lt;/geoimport:eleacc&gt;
+    &lt;geoimport:speed&gt;1.35&lt;/geoimport:speed&gt;
+    &lt;geoimport:src&gt;gps&lt;/geoimport:src&gt;
+   &lt;/extensions&gt;
+  &lt;/trkpt&gt;
+ &lt;/trkseg&gt;&lt;/trk&gt;
+&lt;/gpx&gt;</code></pre>
+</main>
+</body>
+</html>
