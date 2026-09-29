@@ -214,3 +214,7 @@ anything anywhere new, the policy has to say so.
 The byte-level writers (RAF, MP4) are tested against synthetic files, and the
 desktop JPEG writer round-trips through metadata-extractor — an independent
 parser — so agreement means the bytes are right, not merely self-consistent.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
