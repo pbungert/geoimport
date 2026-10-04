@@ -94,8 +94,9 @@ class PhotoImporter(
         log("After filtering, ${filesToCopy.size} files will be copied.")
 
         // Resolved once and carried through: reading EXIF off a card is the
-        // slow part, and both the track filter and the entries need it.
-        val timed = filesToCopy.map { it to captureTime.instantOf(it) }
+        // slow part, and both the track filter and the entries need it. Each
+        // read mostly waits on the card, so a few at a time overlap the waits.
+        val timed = filesToCopy.mapInParallel(READ_THREADS) { it to captureTime.instantOf(it) }
         val geotagger = geotaggerFor(timed.map { it.second })
 
         val entries = timed.map { (file, time) ->
@@ -351,6 +352,9 @@ class PhotoImporter(
          * `101_FUJI` as well as `100CANON`, `100MSDCF`, `100OLYMP`.
          */
         private const val CAMERA_SAMPLE = 10
+
+        /** Capture times read at once while planning. */
+        private const val READ_THREADS = 4
 
         /** Formats whose EXIF every reader can get at, asked first for the camera. */
         private val EXIF_FIRST = setOf("jpg", "jpeg")

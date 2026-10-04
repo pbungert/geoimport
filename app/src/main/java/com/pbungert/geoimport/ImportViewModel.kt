@@ -26,6 +26,7 @@ import com.pbungert.geoimport.core.geotag.GeotagCounts
 import com.pbungert.geoimport.core.geotag.GeotagTarget
 import com.pbungert.geoimport.core.geotag.writeGeotags
 import com.pbungert.geoimport.core.geotag.XmpSidecarWriter
+import com.pbungert.geoimport.core.imports.CachingExifDateReader
 import com.pbungert.geoimport.core.imports.CaptureTimeResolver
 import com.pbungert.geoimport.core.imports.CameraSettings
 import com.pbungert.geoimport.core.imports.ImportPlan
@@ -473,6 +474,13 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         trackKeys = tracks.map { it.key }.toSet(),
     )
 
+    /**
+     * Capture times as the camera wrote them, kept for the life of the view
+     * model: a preview rebuilt because a setting changed reads nothing off the
+     * card again, and neither does one started a second time.
+     */
+    private val exifDates = CachingExifDateReader(AndroidExifDateReader)
+
     private val importJob = Job("Import failed")
 
     /** Independent of [phase] so a preview on one screen survives the other. */
@@ -719,7 +727,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val source = File(volumeDir, "DCIM")
         val destBase = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
 
-        val captureTime = CaptureTimeResolver(AndroidExifDateReader, assumedZone, cameraClockOffset)
+        val captureTime = CaptureTimeResolver(exifDates, assumedZone, cameraClockOffset)
         val lastImports = LastImports.read(LastImport.fileIn(TrackRecorderService.tracksDir()))
         val importer = PhotoImporter(
             source, destBase, captureTime, ::log,
@@ -872,7 +880,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         val tolerance = Duration.ofMinutes(toleranceMinutes.trim().toLongOrNull() ?: 30L)
-        val captureTime = CaptureTimeResolver(AndroidExifDateReader, assumedZone, cameraClockOffset)
+        val captureTime = CaptureTimeResolver(exifDates, assumedZone, cameraClockOffset)
 
         val files = folder.listFiles { f ->
             f.isFile && f.extension.lowercase() in PhotoImporter.DEFAULT_EXTENSIONS
