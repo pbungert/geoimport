@@ -1,5 +1,6 @@
 package com.pbungert.geoimport
 
+import android.text.format.DateFormat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,24 +14,33 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SdCard
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,9 +50,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.pbungert.geoimport.core.imports.parseResumeTimestamp
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 
 private enum class ResumeMode { Auto, ByFile, ByTime }
 
@@ -129,7 +148,9 @@ internal fun ImportSettingsSheet(
                     value = when (resumeMode) {
                         ResumeMode.Auto -> "The last photo of the previous import"
                         ResumeMode.ByFile -> viewModel.startFilename.ifBlank { "A filename" }
-                        ResumeMode.ByTime -> viewModel.startTimestamp.ifBlank { "A time" }
+                        ResumeMode.ByTime -> parseResumeTimestamp(viewModel.startTimestamp)
+                            ?.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT))
+                            ?: "A time"
                     },
                     expanded = open == SettingSection.Resume,
                     onToggle = { toggle(SettingSection.Resume) },
@@ -334,13 +355,112 @@ private fun ResumeEditor(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            ResumeMode.ByTime -> OutlinedTextField(
-                value = viewModel.startTimestamp,
-                onValueChange = { viewModel.startTimestamp = it },
-                label = { Text("Start after") },
-                placeholder = { Text("2026-07-17 14:30") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+            ResumeMode.ByTime -> ResumeTimePicker(
+                value = parseResumeTimestamp(viewModel.startTimestamp),
+                onValueChange = { viewModel.startTimestamp = it.format(RESUME_FORMAT) },
+            )
+        }
+    }
+}
+
+/** What the view model parses back; seconds are dropped, the pickers have none. */
+private val RESUME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+private enum class PickerDialog { None, Date, Time }
+
+/**
+ * A date button and a time button, each opening the platform-style picker.
+ * Until a date is picked there is no resume point; the time then defaults to
+ * the start of that day, as a bare date does on the command line.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ResumeTimePicker(
+    value: LocalDateTime?,
+    onValueChange: (LocalDateTime) -> Unit,
+) {
+    var dialog by rememberSaveable { mutableStateOf(PickerDialog.None) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(
+                onClick = { dialog = PickerDialog.Date },
+                modifier = Modifier.weight(3f),
+            ) {
+                Icon(Icons.Filled.CalendarMonth, contentDescription = null)
+                Text(
+                    value?.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))
+                        ?: "Pick a date",
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+            OutlinedButton(
+                onClick = { dialog = PickerDialog.Time },
+                enabled = value != null,
+                modifier = Modifier.weight(2f),
+            ) {
+                Icon(Icons.Filled.Schedule, contentDescription = null)
+                Text(
+                    value?.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)) ?: "--:--",
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+        }
+        Text(
+            "Photos taken after this, by the camera's own clock, are imported.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    when (dialog) {
+        PickerDialog.None -> Unit
+        PickerDialog.Date -> {
+            // The picker works in UTC midnights, so convert in UTC to keep the day.
+            val state = rememberDatePickerState(
+                initialSelectedDateMillis = (value?.toLocalDate() ?: LocalDate.now())
+                    .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
+            )
+            DatePickerDialog(
+                onDismissRequest = { dialog = PickerDialog.None },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            state.selectedDateMillis?.let { millis ->
+                                val date = Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
+                                onValueChange(date.atTime(value?.toLocalTime() ?: LocalTime.MIDNIGHT))
+                            }
+                            dialog = PickerDialog.None
+                        },
+                        enabled = state.selectedDateMillis != null,
+                    ) { Text("OK") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { dialog = PickerDialog.None }) { Text("Cancel") }
+                },
+            ) {
+                DatePicker(state = state)
+            }
+        }
+        PickerDialog.Time -> if (value != null) {
+            val context = LocalContext.current
+            val state = rememberTimePickerState(
+                initialHour = value.hour,
+                initialMinute = value.minute,
+                is24Hour = DateFormat.is24HourFormat(context),
+            )
+            AlertDialog(
+                onDismissRequest = { dialog = PickerDialog.None },
+                confirmButton = {
+                    TextButton(onClick = {
+                        onValueChange(value.toLocalDate().atTime(state.hour, state.minute))
+                        dialog = PickerDialog.None
+                    }) { Text("OK") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { dialog = PickerDialog.None }) { Text("Cancel") }
+                },
+                text = { TimePicker(state = state) },
             )
         }
     }
