@@ -1,5 +1,6 @@
 package com.pbungert.geoimport.core.imports
 
+import com.pbungert.geoimport.core.spi.CameraReader
 import com.pbungert.geoimport.core.spi.ExifDateReader
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -26,8 +27,11 @@ class PhotoImporterTest {
         extensions: Set<String> = PhotoImporter.DEFAULT_EXTENSIONS,
         lastImport: LastImport? = null,
         excludedTypes: Set<String> = emptySet(),
+        lastImports: LastImports = LastImports(listOfNotNull(lastImport)),
+        cameraReader: CameraReader? = null,
     ) = PhotoImporter(
-        source, dest, CaptureTimeResolver(noExif), { log.add(it) }, extensions, lastImport, excludedTypes,
+        source, dest, CaptureTimeResolver(noExif), { log.add(it) }, extensions,
+        lastImports, excludedTypes, cameraReader,
     )
 
     /** Where an import on another device stopped. */
@@ -300,6 +304,72 @@ class PhotoImporterTest {
         val at = Instant.parse("2026-09-27T12:00:00Z")
 
         assertEquals(LastImport("DSCF0002.RAF", 1, at, "Tablet"), importer.lastImportOf(result, "Tablet", at))
+    }
+
+    // --- more than one camera ---------------------------------------------
+
+    private val xt2 = Camera("FUJIFILM", "X-T2", "81M52794")
+    private val xt5 = Camera("FUJIFILM", "X-T5", "1AB00042")
+
+    /** The fixtures hold their own name, so a file's camera is looked up by it. */
+    private fun cameras(vararg byName: Pair<String, Camera>): CameraReader {
+        val map = byName.toMap()
+        return CameraReader { map[it.name] }
+    }
+
+    @Test
+    fun resumesWhereThisCamerasLastImportStoppedNotAnothers() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0002.RAF", "DSCF0003.RAF")
+        val states = LastImports(
+            listOf(
+                elsewhere("DSCF0001.RAF", 4).copy(camera = xt2),
+                elsewhere("DSCF0003.RAF", 5).copy(camera = xt5),
+            )
+        )
+
+        val importer = importer(lastImports = states, cameraReader = cameras("DSCF0003.RAF" to xt2))
+        val result = importer.run(startFilename = null, startTimestamp = null)
+
+        assertEquals(listOf("DSCF0002.RAF", "DSCF0003.RAF"), result.copied.map { it.name })
+        assertEquals("Import 06", result.destFolder!!.name)
+        assertEquals(xt2, importer.lastImportOf(result, "Tablet", Instant.EPOCH)!!.camera)
+    }
+
+    @Test
+    fun aCameraWithoutAnEntryStartsFromTheBeginning() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0002.RAF")
+        val states = LastImports(listOf(elsewhere("DSCF0001.RAF", 1).copy(camera = xt5)))
+
+        val result = importer(lastImports = states, cameraReader = cameras("DSCF0002.RAF" to xt2))
+            .run(startFilename = null, startTimestamp = null)
+
+        assertEquals(listOf("DSCF0001.RAF", "DSCF0002.RAF"), result.copied.map { it.name })
+    }
+
+    @Test
+    fun theLocalWatermarkComesFromAFolderOfTheSameCamera() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0002.RAF", "DSCF0003.RAF", "DSCF0004.RAF")
+        importFolder(1, "DSCF0001.RAF")
+        // The other camera's import is newer and got further in the numbering.
+        val other = importFolder(2, "DSCF0003.RAF")
+        val reader = CameraReader { file ->
+            if (file.parentFile == other) xt5 else xt2
+        }
+
+        val result = importer(cameraReader = reader).run(startFilename = null, startTimestamp = null)
+
+        assertEquals(listOf("DSCF0002.RAF", "DSCF0003.RAF", "DSCF0004.RAF"), result.copied.map { it.name })
+        assertEquals("Import 03", result.destFolder!!.name)
+    }
+
+    @Test
+    fun anEntryFromBeforeCamerasWereToldApartStillResumes() {
+        setUpCard("101_FUJI", "DSCF0001.RAF", "DSCF0002.RAF")
+
+        val result = importer(lastImport = elsewhere("DSCF0001.RAF", 1), cameraReader = cameras("DSCF0002.RAF" to xt2))
+            .run(startFilename = null, startTimestamp = null)
+
+        assertEquals(listOf("DSCF0002.RAF"), result.copied.map { it.name })
     }
 
     // --- choosing file types ----------------------------------------------

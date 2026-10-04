@@ -2,6 +2,7 @@ package com.pbungert.geoimport.core.imports
 
 import com.pbungert.geoimport.core.geotag.Geotagger
 import com.pbungert.geoimport.core.geotag.GpsWriter
+import com.pbungert.geoimport.core.spi.CameraReader
 import java.io.File
 import java.io.IOException
 import java.time.Instant
@@ -14,9 +15,11 @@ import kotlin.math.pow
  * (or an explicit start filename/timestamp) and copies the rest into the next
  * "Import NN" folder below [destBasePath].
  *
- * [lastImport] is where the last import on any device stopped, when imports
- * are shared between devices. It can move the resume point forward and the
- * folder number up, never back.
+ * [lastImports] is where the last import from each camera stopped, on any
+ * device, when imports are shared between devices. It can move the resume
+ * point forward and the folder number up, never back. [cameraReader] tells
+ * which camera the card is from; without it every card counts as the same
+ * unknown camera.
  *
  * Files of a type in [excludedTypes] are still planned, so the preview can
  * show them, but start out deselected and are not copied unless picked.
@@ -27,8 +30,9 @@ class PhotoImporter(
     private val captureTime: CaptureTimeResolver,
     private val log: (String) -> Unit,
     private val extensions: Set<String> = DEFAULT_EXTENSIONS,
-    private val lastImport: LastImport? = null,
+    private val lastImports: LastImports = LastImports(),
     private val excludedTypes: Set<String> = emptySet(),
+    private val cameraReader: CameraReader? = null,
 ) {
     /**
      * [copies] pairs each copy with the entry it was made from. That pairing is
@@ -36,7 +40,11 @@ class PhotoImporter(
      * the same name, only one of them can land in the flat destination, and
      * looking the other up by name finds the wrong photo.
      */
-    data class ImportResult(val copies: List<Pair<PlannedFile, File>>, val destFolder: File?) {
+    data class ImportResult(
+        val copies: List<Pair<PlannedFile, File>>,
+        val destFolder: File?,
+        val camera: Camera? = null,
+    ) {
         val copied get() = copies.map { it.second }
     }
 
@@ -69,15 +77,19 @@ class PhotoImporter(
     ): ImportPlan {
         // Numbered above every folder here and every one another device made,
         // so the same Import NN never holds two different imports.
-        val nextNumber = maxOf(findHighestImportNumber(), lastImport?.importNumber ?: 0) + 1
+        val nextNumber = maxOf(findHighestImportNumber(), lastImports.highestImportNumber) + 1
         val destFolder = File(destBasePath, importFolderName(nextNumber))
         val sourceFiles = collectSourceFiles(sourcePath)
             ?: return ImportPlan(sourcePath, destFolder, null, emptyList())
 
         log("Found ${describe(sourceFiles)}.")
+        val camera = cameraOf(sourceFiles)
+        if (cameraReader != null) {
+            log(camera?.let { "The card is from $it." } ?: "The photos on the card do not say which camera took them.")
+        }
 
         val (resolvedFilename, resolvedTimestamp) =
-            resolveStartCriteria(startFilename, startTimestamp, sourceFiles)
+            resolveStartCriteria(startFilename, startTimestamp, sourceFiles, camera)
         val filesToCopy = filterNewFiles(sourceFiles, resolvedFilename, resolvedTimestamp)
         log("After filtering, ${filesToCopy.size} files will be copied.")
 
@@ -99,7 +111,7 @@ class PhotoImporter(
                 selected = file.extension.lowercase() !in excludedTypes,
             )
         }
-        return ImportPlan(sourcePath, destFolder, resolvedFilename, entries)
+        return ImportPlan(sourcePath, destFolder, resolvedFilename, entries, camera)
     }
 
     /**
@@ -137,7 +149,7 @@ class PhotoImporter(
             log("${failed.size} of $total files could not be copied: ${failed.joinToString(", ")}")
         }
         if (copies.isEmpty()) throw IOException("no files could be copied")
-        return ImportResult(copies, plan.destFolder)
+        return ImportResult(copies, plan.destFolder, plan.camera)
     }
 
     private fun collectSourceFiles(basePath: File): List<File>? {
@@ -159,6 +171,7 @@ class PhotoImporter(
         startFilename: String?,
         startTimestamp: LocalDateTime?,
         sourceFiles: List<File>,
+        camera: Camera?,
     ): Pair<String?, LocalDateTime?> {
         if (startTimestamp != null) {
             log("Starting from timestamp: $startTimestamp")
@@ -169,8 +182,8 @@ class PhotoImporter(
             return startFilename to null
         }
 
-        val local = localWatermark()
-        val shared = sharedWatermark(sourceFiles)
+        val local = localWatermark(camera)
+        val shared = sharedWatermark(sourceFiles, camera)
         if (shared != null && (local == null || LastImport.isLater(shared.lastFile, than = local.name))) {
             log(
                 "Starting after '${shared.lastFile}', where the import on ${shared.device} " +
@@ -185,29 +198,59 @@ class PhotoImporter(
         return null to null
     }
 
-    /** The last photo of the newest Import NN folder on this device. */
-    private fun localWatermark(): File? {
-        val highestNumber = findHighestImportNumber()
-        if (highestNumber == 0) return null
-        val lastFolder = File(destBasePath, importFolderName(highestNumber))
-        // Only importable files may become the watermark. Geotagging
-        // leaves .xmp sidecars in this folder, and a sidecar shares its
-        // sequence number with the photo it belongs to — so picking one
-        // would yield a name that matches nothing on the card, leaving
-        // `started` false in filterNewFiles and silently importing zero
-        // files on every subsequent run.
-        return sortByFilenameChronological(
-            lastFolder.listFiles()?.filter { it.isFile && isImportable(it) } ?: emptyList()
-        ).lastOrNull()
+    /**
+     * The last photo of the newest Import NN folder on this device that holds
+     * [camera]'s photos. Another camera's folder says nothing about this card,
+     * and two cameras of a make number their files alike - a Fuji resuming
+     * after another Fuji's DSCF0500 would skip photos it never imported.
+     */
+    private fun localWatermark(camera: Camera?): File? {
+        if (!destBasePath.isDirectory) return null
+        val folders = destBasePath.listFiles { f -> f.isDirectory && importNumberOf(f) != null }
+            ?.sortedByDescending { importNumberOf(it) }
+            .orEmpty()
+        for (folder in folders) {
+            // Only importable files may become the watermark. Geotagging
+            // leaves .xmp sidecars in this folder, and a sidecar shares its
+            // sequence number with the photo it belongs to — so picking one
+            // would yield a name that matches nothing on the card, leaving
+            // `started` false in filterNewFiles and silently importing zero
+            // files on every subsequent run.
+            val files = sortByFilenameChronological(
+                folder.listFiles()?.filter { it.isFile && isImportable(it) } ?: emptyList()
+            )
+            // Without a camera to look for, the newest folder it is, as before
+            // cameras were told apart.
+            if (camera == null) return files.lastOrNull()
+            if (files.isEmpty()) continue
+            // A folder whose photos do not say counts as this camera's.
+            val folderCamera = cameraOf(files)
+            if (folderCamera == null || folderCamera.matches(camera)) return files.last()
+            log("Skipping ${folder.name}, which holds photos from $folderCamera.")
+        }
+        return null
     }
 
     /**
-     * [lastImport], when this card is the one it came from. A resume point that
-     * is not on the card matches nothing, and would import nothing at all - an
-     * import on another device may well have been from another card.
+     * Which camera took the newest of [files]. Photos are asked before videos,
+     * which carry no EXIF, and only a few: the newest photos are what the
+     * resume point is about, and reading a card is slow.
      */
-    private fun sharedWatermark(sourceFiles: List<File>): LastImport? {
-        val shared = lastImport ?: return null
+    private fun cameraOf(files: List<File>): Camera? {
+        val reader = cameraReader ?: return null
+        val newest = sortByFilenameChronological(files).takeLast(CAMERA_SAMPLE).reversed()
+        return newest.sortedBy { it.extension.lowercase() !in EXIF_FIRST }
+            .firstNotNullOfOrNull { runCatching { reader.readCamera(it) }.getOrNull() }
+    }
+
+    /**
+     * Where the last import from [camera] stopped, when this card is the one
+     * it came from. A resume point that is not on the card matches nothing,
+     * and would import nothing at all - an import on another device may well
+     * have been from another card.
+     */
+    private fun sharedWatermark(sourceFiles: List<File>, camera: Camera?): LastImport? {
+        val shared = lastImports.forCamera(camera) ?: return null
         if (sourceFiles.none { it.name.equals(shared.lastFile, ignoreCase = true) }) {
             log(
                 "The last import on ${shared.device} stopped after '${shared.lastFile}', " +
@@ -280,9 +323,12 @@ class PhotoImporter(
         if (!destBasePath.isDirectory) return 0
 
         return destBasePath.listFiles { f -> f.isDirectory && f.name.startsWith("Import ") }
-            ?.map { it.name.replace("Import ", "").toIntOrNull() ?: 0 }
+            ?.map { importNumberOf(it) ?: 0 }
             ?.maxOrNull() ?: 0
     }
+
+    private fun importNumberOf(folder: File) =
+        if (folder.name.startsWith("Import ")) folder.name.removePrefix("Import ").toIntOrNull() else null
 
     private fun importFolderName(number: Int) = "Import %02d".format(number)
 
@@ -296,7 +342,7 @@ class PhotoImporter(
         val number = folder.name.removePrefix("Import ").toIntOrNull() ?: return null
         val last = sortByFilenameChronological(result.copied.filter(::isImportable)).lastOrNull()
             ?: return null
-        return LastImport(last.name, number, at, device)
+        return LastImport(last.name, number, at, device, result.camera)
     }
 
     companion object {
@@ -304,6 +350,11 @@ class PhotoImporter(
          * DCF directory names: three digits plus five free characters, so
          * `101_FUJI` as well as `100CANON`, `100MSDCF`, `100OLYMP`.
          */
+        private const val CAMERA_SAMPLE = 10
+
+        /** Formats whose EXIF every reader can get at, asked first for the camera. */
+        private val EXIF_FIRST = setOf("jpg", "jpeg")
+
         val DCF_FOLDER_PATTERN = Regex("""^\d{3}[0-9A-Za-z_]{5}$""")
 
         /**

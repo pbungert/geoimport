@@ -19,6 +19,8 @@ data class ImportPlan(
     /** The file the resume watermark landed on, for explaining an empty plan. */
     val resumeAfter: String?,
     val entries: List<PlannedFile>,
+    /** The camera the card is from, when its photos said. */
+    val camera: Camera? = null,
 ) {
     val isEmpty get() = entries.isEmpty()
 

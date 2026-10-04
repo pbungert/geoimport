@@ -9,6 +9,7 @@ import androidx.work.WorkerParameters
 import com.google.android.gms.tasks.Tasks
 import com.pbungert.geoimport.core.imports.CameraSettings
 import com.pbungert.geoimport.core.imports.LastImport
+import com.pbungert.geoimport.core.imports.LastImports
 import com.pbungert.geoimport.core.sync.ConflictPolicy
 import com.pbungert.geoimport.core.sync.DirectoryStore
 import com.pbungert.geoimport.core.sync.SyncEngine
@@ -138,7 +139,7 @@ class GeoimportSyncWorker(context: Context, params: WorkerParameters) : Worker(c
             accepts = isState,
             merge = { name, local, remote ->
                 if (name == CameraSettings.FILE_NAME) CameraSettings.mergeBytes(local, remote)
-                else LastImport.mergeBytes(local, remote)
+                else LastImports.mergeBytes(local, remote)
             },
         )
         val indexFile = SyncManager.stateIndexFile(context)

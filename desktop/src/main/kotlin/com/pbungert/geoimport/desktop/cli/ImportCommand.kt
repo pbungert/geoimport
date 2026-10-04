@@ -15,9 +15,11 @@ import com.pbungert.geoimport.core.geotag.writeGeotags
 import com.pbungert.geoimport.core.imports.CameraSettings
 import com.pbungert.geoimport.core.imports.ImportPlan
 import com.pbungert.geoimport.core.imports.LastImport
+import com.pbungert.geoimport.core.imports.LastImports
 import com.pbungert.geoimport.core.imports.PhotoImporter
 import com.pbungert.geoimport.core.imports.parseResumeTimestamp
 import com.pbungert.geoimport.core.track.TrackSelection
+import com.pbungert.geoimport.desktop.platform.DesktopCameraReader
 import java.io.File
 import java.net.InetAddress
 import java.time.Instant
@@ -78,8 +80,9 @@ class ImportCommand : CliktCommand(name = "import") {
             captureTime = geotag.captureTimeResolver(),
             log = { if (dryRun) Unit else echo(it) },
             extensions = PhotoImporter.MEDIA_EXTENSIONS,
-            lastImport = stateFile?.let(LastImport::read),
+            lastImports = stateFile?.let(LastImports::read) ?: LastImports(),
             excludedTypes = excludedTypes(),
+            cameraReader = DesktopCameraReader,
         )
 
         // Which tracks to use is settled inside plan(), once the capture times
@@ -113,7 +116,7 @@ class ImportCommand : CliktCommand(name = "import") {
         }
         if (stateFile != null) {
             importer.lastImportOf(result, deviceName(), Instant.now())?.let { state ->
-                LastImport.record(state, stateFile)
+                LastImports.record(state, stateFile)
                 echo("Saved where this import stopped, for the other devices.")
             }
         }

@@ -29,6 +29,7 @@ import com.pbungert.geoimport.core.imports.CaptureTimeResolver
 import com.pbungert.geoimport.core.imports.CameraSettings
 import com.pbungert.geoimport.core.imports.ImportPlan
 import com.pbungert.geoimport.core.imports.LastImport
+import com.pbungert.geoimport.core.imports.LastImports
 import com.pbungert.geoimport.core.imports.PlannedFile
 import com.pbungert.geoimport.core.imports.PhotoImporter
 import com.pbungert.geoimport.core.imports.parseResumeTimestamp
@@ -37,6 +38,7 @@ import com.pbungert.geoimport.core.track.NamedTrack
 import com.pbungert.geoimport.core.track.TrackParser
 import com.pbungert.geoimport.core.track.TrackSelection
 import com.pbungert.geoimport.recorder.TrackRecorderService
+import com.pbungert.geoimport.platform.AndroidCameraReader
 import com.pbungert.geoimport.platform.AndroidExifDateReader
 import com.pbungert.geoimport.platform.AndroidJpegGpsWriter
 import com.pbungert.geoimport.sync.SyncManager
@@ -629,12 +631,13 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         val destBase = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
 
         val captureTime = CaptureTimeResolver(AndroidExifDateReader, assumedZone, cameraClockOffset)
-        val lastImport = LastImport.read(LastImport.fileIn(TrackRecorderService.tracksDir()))
+        val lastImports = LastImports.read(LastImport.fileIn(TrackRecorderService.tracksDir()))
         val importer = PhotoImporter(
             source, destBase, captureTime, ::log,
             extensions = PhotoImporter.MEDIA_EXTENSIONS,
-            lastImport = lastImport,
+            lastImports = lastImports,
             excludedTypes = excludedTypes,
+            cameraReader = AndroidCameraReader,
         )
         // The track is picked here rather than up front: which recordings are
         // worth matching against only becomes answerable once the photos on the
@@ -731,7 +734,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         log("Import complete! ${result.copied.size} files in '${result.destFolder?.name}'.")
         // Where this import stopped, for the next one here or on another device.
         context.importer.lastImportOf(result, deviceName(), Instant.now())?.let { state ->
-            runCatching { LastImport.record(state, LastImport.fileIn(TrackRecorderService.tracksDir())) }
+            runCatching { LastImports.record(state, LastImport.fileIn(TrackRecorderService.tracksDir())) }
                 .onFailure { log("Could not save where this import stopped: ${it.message}") }
             SyncManager.syncNow(app)
         }
