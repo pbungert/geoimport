@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.pbungert.geoimport.core.geotag.BuiltInGpsWriter
@@ -43,6 +44,8 @@ import com.pbungert.geoimport.platform.AndroidExifDateReader
 import com.pbungert.geoimport.platform.AndroidJpegGpsWriter
 import com.pbungert.geoimport.sync.SyncManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
@@ -89,6 +92,7 @@ data class ImportSummary(
     val notTagged: Int,
 )
 
+@OptIn(FlowPreview::class)
 class ImportViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Embed where possible, sidecar otherwise; never lose a position. */
@@ -326,16 +330,48 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             private set
 
         /**
+         * How the open preview was built, and from which settings. Set while a
+         * preview is on screen and not yet confirmed or left, so a settings
+         * change can rebuild it; null otherwise.
+         */
+        private var preparing: (() -> Unit)? = null
+        private var plannedWith: PlanInputs? = null
+
+        /** Files unticked in the preview being replaced, unticked again in the new one. */
+        private var carriedDeselections: Set<File> = emptySet()
+
+        /**
          * Builds the preview. Nothing is written until [confirm]; the plan it
          * produces is the same object execution consumes, so the list on
          * screen cannot disagree with what happens.
          */
         fun start(prepare: () -> Unit) {
             if (running) return
+            preparing = prepare
+            carriedDeselections = emptySet()
+            run(prepare, busy = true)
+        }
+
+        /**
+         * Rebuilds the open preview if a setting it was built from has changed
+         * since. The old list stays up while the new one is worked out; the
+         * confirm button is off meanwhile, because [running] is set.
+         */
+        fun replanIfChanged(inputs: PlanInputs) {
+            val prepare = preparing ?: return
+            if (running || inputs == plannedWith) return
+            carriedDeselections = (phase as? Phase.Planned)?.plan?.entries
+                ?.filterNot { it.selected }?.map { it.source }?.toSet()
+                .orEmpty()
+            run(prepare, busy = phase !is Phase.Planned)
+        }
+
+        private fun run(prepare: () -> Unit, busy: Boolean) {
             running = true
+            plannedWith = planInputs()
             logLines.clear()
             activeTrackNames = null
-            post(Phase.Busy("Preparing…", 0, 0))
+            if (busy) post(Phase.Busy("Preparing…", 0, 0))
             inBackground(prepare)
         }
 
@@ -343,12 +379,14 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             val planned = phase as? Phase.Planned ?: return
             if (running) return
             running = true
+            preparing = null
             inBackground { execute(planned.plan) }
         }
 
         /** A run in progress keeps going - the notification says so. */
         fun cancel() {
             if (running) return
+            preparing = null
             post(Phase.Idle)
         }
 
@@ -373,7 +411,21 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         fun post(next: Phase) {
-            viewModelScope.launch(Dispatchers.Main.immediate) { phase = next }
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                phase = if (next is Phase.Planned && carriedDeselections.isNotEmpty()) {
+                    val carried = carriedDeselections
+                    carriedDeselections = emptySet()
+                    Phase.Planned(
+                        next.plan.copy(
+                            entries = next.plan.entries.map {
+                                if (it.source in carried) it.copy(selected = false) else it
+                            }
+                        )
+                    )
+                } else {
+                    next
+                }
+            }
         }
 
         /** Logs [message] and moves this job into the failed state. */
@@ -394,6 +446,32 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    /**
+     * Every setting a preview is built from, so a change to any of them can
+     * be told apart from nothing having changed. File types are not here:
+     * those toggle entries in the open preview directly.
+     */
+    data class PlanInputs(
+        val startFilename: String,
+        val startTimestamp: String,
+        val toleranceMinutes: String,
+        val photoTimeZone: String,
+        val clockOffsetMinutes: String,
+        val selectedTrackNames: Set<String>,
+        /** Which tracks are on offer, not their points: a recording growing by a fix is no reason to rebuild. */
+        val trackKeys: Set<String>,
+    )
+
+    private fun planInputs() = PlanInputs(
+        startFilename = startFilename.trim(),
+        startTimestamp = startTimestamp.trim(),
+        toleranceMinutes = toleranceMinutes.trim(),
+        photoTimeZone = photoTimeZone.trim(),
+        clockOffsetMinutes = clockOffsetMinutes.trim(),
+        selectedTrackNames = selectedTrackNames,
+        trackKeys = tracks.map { it.key }.toSet(),
+    )
 
     private val importJob = Job("Import failed")
 
@@ -419,6 +497,17 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                 .collect {
                     refreshTracks()
                     reloadCameraSettings()
+                }
+        }
+        // An open preview follows the settings sheet. Waiting out the typing
+        // keeps a tolerance of "45" from being planned as "4" first; watching
+        // `running` catches a change made while the last preview was building.
+        viewModelScope.launch {
+            snapshotFlow { planInputs() to running }
+                .debounce(400)
+                .collect { (inputs, _) ->
+                    importJob.replanIfChanged(inputs)
+                    tagJob.replanIfChanged(inputs)
                 }
         }
     }
