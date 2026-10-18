@@ -68,6 +68,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 
 /**
  * One job on screen and nothing competing with it: the map above, and below it
@@ -292,7 +293,7 @@ private fun PlanPanel(
     onConfirm: () -> Unit,
 ) {
     val zone = remember { ZoneId.systemDefault() }
-    val timeFormat = remember { DateTimeFormatter.ofPattern("HH:mm") }
+    val takenFormat = remember { DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT) }
     val count = plan.selected.size
     val missing = count - plan.willGeotag
 
@@ -328,7 +329,7 @@ private fun PlanPanel(
         // reading the card did.
         LazyColumn(modifier = Modifier.heightIn(max = 340.dp)) {
             items(plan.entries, key = { it.source.path }) { entry ->
-                PlanEntryRow(entry, zone, timeFormat, onToggle)
+                PlanEntryRow(entry, zone, takenFormat, onToggle)
             }
         }
 
@@ -386,7 +387,7 @@ private fun TypeChips(types: List<ImportPlan.TypeCount>, onToggle: (String, Bool
 private fun PlanEntryRow(
     entry: PlannedFile,
     zone: ZoneId,
-    timeFormat: DateTimeFormatter,
+    takenFormat: DateTimeFormatter,
     onToggle: (File, Boolean) -> Unit,
 ) {
     Row(
@@ -407,7 +408,7 @@ private fun PlanEntryRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            val taken = entry.captureTime.atZone(zone).format(timeFormat)
+            val taken = entry.captureTime.atZone(zone).format(takenFormat)
             Text(
                 if (entry.fix != null) "$taken · placed on your track"
                 else "$taken · no track nearby",
