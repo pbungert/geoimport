@@ -163,6 +163,12 @@ files and is remembered for the next import. A type never seen before starts
 ticked, so nothing new is skipped silently. On the desktop, `--exclude jpg,mov`
 does the same, and it defaults to the synced choice.
 
+The import and placing screens show each photo as a thumbnail on the map, at
+the position it will get, and on the summary at the position it got. Nearby
+photos share a thumbnail with a count until you zoom in, and tapping one shows
+its name and time. Thumbnails come from the preview the camera embedded, so
+RAW files show without being decoded.
+
 The app uses the `drive.file` scope, so it sees only files it created. On a
 PC, Google Drive for Desktop mirrors the folder, and
 `--tracks-dir "G:\My Drive\Geoimport"` reads it like any other folder,

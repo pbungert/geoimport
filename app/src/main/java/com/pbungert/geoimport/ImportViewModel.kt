@@ -44,6 +44,7 @@ import com.pbungert.geoimport.platform.AndroidCameraReader
 import com.pbungert.geoimport.platform.AndroidExifDateReader
 import com.pbungert.geoimport.platform.AndroidJpegGpsWriter
 import com.pbungert.geoimport.sync.SyncManager
+import com.pbungert.geoimport.ui.map.PhotoPin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
@@ -91,6 +92,8 @@ data class ImportSummary(
     val exifTagged: Int,
     val sidecarTagged: Int,
     val notTagged: Int,
+    /** Where each file that got a position was put, for the map to show. */
+    val placed: List<PhotoPin> = emptyList(),
 )
 
 @OptIn(FlowPreview::class)
@@ -797,6 +800,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         var counts = GeotagCounts()
+        val placed = mutableListOf<PhotoPin>()
         if (context.hasTrack) {
             // The chain embeds where it can - Lightroom for Android ignores XMP
             // sidecars, so a RAF position has to live in its EXIF block - and
@@ -805,6 +809,8 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
             importJob.post(Phase.Busy("Placing positions", 0, total))
             var done = 0
             var missed = 0
+            // A fix at the end of a track carries the track's time, not the photo's.
+            val takenAt = result.copies.associate { (entry, copy) -> copy to entry.captureTime }
             // The position each entry was previewed with, written into the copy
             // that entry produced - so what is written is what was shown.
             counts = writeGeotags(
@@ -816,7 +822,9 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                     target.fix == null ->
                         log("No track point within tolerance for ${target.file.name} - not geotagged.")
                 }
-                if (error != null || target.fix == null) missed++
+                val fix = target.fix
+                if (error != null || fix == null) missed++
+                else placed += PhotoPin(target.file, fix.lat, fix.lon, takenAt.getValue(target.file))
                 importJob.post(placing(++done, total, missed))
             }
             log(
@@ -846,6 +854,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                     exifTagged = counts.embedded,
                     sidecarTagged = counts.sidecars,
                     notTagged = counts.untagged,
+                    placed = placed,
                 )
             )
         )
@@ -933,15 +942,19 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
 
         tagJob.post(Phase.Busy("Geotagging", 0, targets.size))
         var done = 0
+        val placed = mutableListOf<PhotoPin>()
+        val takenAt = targets.associate { it.source to it.captureTime }
         val counts = writeGeotags(
             // Tagging happens in place, so the file written is the file planned.
             targets.map { GeotagTarget(it.source, it.fix) },
             gpsWriter,
         ) { target, _, error ->
+            val fix = target.fix
             when {
                 error != null -> log("Could not geotag ${target.file.name}: ${error.message ?: error}")
-                target.fix == null ->
+                fix == null ->
                     log("No track point within tolerance for ${target.file.name} - not geotagged.")
+                else -> placed += PhotoPin(target.file, fix.lat, fix.lon, takenAt.getValue(target.file))
             }
             tagJob.post(Phase.Busy("Geotagging", ++done, targets.size))
         }
@@ -960,6 +973,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                     exifTagged = counts.embedded,
                     sidecarTagged = counts.sidecars,
                     notTagged = counts.untagged,
+                    placed = placed,
                 )
             )
         )

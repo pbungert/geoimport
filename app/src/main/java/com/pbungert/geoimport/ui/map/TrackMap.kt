@@ -69,6 +69,7 @@ import org.maplibre.spatialk.geojson.FeatureCollection
 import org.maplibre.spatialk.geojson.MultiLineString
 import org.maplibre.spatialk.geojson.Point
 import org.maplibre.spatialk.geojson.Position
+import java.io.File
 import kotlin.math.abs
 
 /**
@@ -126,6 +127,9 @@ private val UNDERLAY_COLOR = Color(0xFF9E9E9E)
 /** Rings a fix that was taken out, in the colour of a correction. */
 private val MARK_COLOR = Color(0xFFD32F2F)
 
+/** The exact point a photo thumbnail stands for, under the thumbnail's stem. */
+private val PHOTO_DOT_COLOR = Color(0xFF212121)
+
 /**
  * What a tap actually aims at, as opposed to what is drawn. Short of the 48dp
  * Android asks for - a track doubles back on itself and two parts of the same
@@ -164,6 +168,9 @@ private val LOCATION_PROVIDERS = listOf(
  * [contentPadding] is the part of the map something else covers - a bottom
  * sheet, say. The ornaments move inside it and the camera fits the track into
  * what is left, so neither ends up under the thing on top.
+ *
+ * [photos] are drawn as thumbnails at their positions, which is how a run is
+ * checked at a glance: a photo of the harbour should sit at the harbour.
  */
 @Composable
 fun TrackMap(
@@ -175,6 +182,7 @@ fun TrackMap(
     onMarkClick: ((TrackPoint) -> Unit)? = null,
     /** The faint [DisplayTrack.underlay] line was tapped, away from any mark. */
     onUnderlayClick: (() -> Unit)? = null,
+    photos: List<PhotoPin> = emptyList(),
 ) {
     val cameraState = rememberCameraState()
     val styleState = rememberStyleState()
@@ -185,6 +193,9 @@ fun TrackMap(
     // Once the user has asked to see where they are, stop yanking the camera
     // back to the track bounds every time a new recorded point arrives.
     var followingMyLocation by remember { mutableStateOf(false) }
+    // By file rather than the pin itself, so ticking the photo off in the list
+    // (which makes a new, dimmed pin) keeps it open.
+    var selectedPhoto by remember { mutableStateOf<File?>(null) }
 
     fun showLocation(location: Location?) {
         locating = false
@@ -294,6 +305,10 @@ fun TrackMap(
             // All built-in ornaments off (logo included); the scale bar below
             // takes the logo's bottom-left spot. Compose controls replace them.
             options = MapOptions(ornamentOptions = OrnamentOptions.AllDisabled),
+            onMapClick = { _, _ ->
+                selectedPhoto = null
+                ClickResult.Pass
+            },
         ) {
             tracks.forEachIndexed { index, track ->
                 key(track.name) {
@@ -425,6 +440,25 @@ fun TrackMap(
                     }
                 }
             }
+            if (photos.isNotEmpty()) {
+                val photoData = remember(photos) {
+                    GeoJsonData.Features(
+                        FeatureCollection(
+                            photos.map {
+                                Feature(Point(Position(it.lon, it.lat)), JsonObject(emptyMap()))
+                            }
+                        )
+                    )
+                }
+                CircleLayer(
+                    id = "photo-dots",
+                    source = rememberGeoJsonSource(photoData),
+                    color = const(PHOTO_DOT_COLOR),
+                    radius = const(3.5.dp),
+                    strokeColor = const(Color.White),
+                    strokeWidth = const(1.5.dp),
+                )
+            }
             myLocation?.let { position ->
                 val here = rememberGeoJsonSource(GeoJsonData.Features(Point(position)))
                 CircleLayer(
@@ -436,6 +470,15 @@ fun TrackMap(
                     strokeWidth = const(2.5.dp),
                 )
             }
+        }
+        if (photos.isNotEmpty()) {
+            PhotoThumbnailOverlay(
+                pins = photos,
+                cameraState = cameraState,
+                selected = photos.firstOrNull { it.file == selectedPhoto },
+                onSelect = { selectedPhoto = it?.file },
+                modifier = Modifier.fillMaxSize(),
+            )
         }
         ScaleBar(
             metersPerDp = cameraState.metersPerDpAtTarget,
@@ -494,14 +537,18 @@ fun TrackMap(
 
 /** Full-screen [TrackMap] shown as a dialog over the whole app. */
 @Composable
-fun FullscreenTrackMapDialog(tracks: List<DisplayTrack>, onDismiss: () -> Unit) {
+fun FullscreenTrackMapDialog(
+    tracks: List<DisplayTrack>,
+    photos: List<PhotoPin> = emptyList(),
+    onDismiss: () -> Unit,
+) {
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(modifier = Modifier.fillMaxSize()) {
             Box(modifier = Modifier.fillMaxSize()) {
-                TrackMap(tracks, modifier = Modifier.fillMaxSize())
+                TrackMap(tracks, modifier = Modifier.fillMaxSize(), photos = photos)
                 FilledTonalIconButton(
                     onClick = onDismiss,
                     modifier = Modifier

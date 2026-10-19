@@ -63,6 +63,7 @@ import com.pbungert.geoimport.core.imports.ImportPlan
 import com.pbungert.geoimport.core.imports.PlannedFile
 import com.pbungert.geoimport.ui.map.DisplayTrack
 import com.pbungert.geoimport.ui.map.FullscreenTrackMapDialog
+import com.pbungert.geoimport.ui.map.PhotoPin
 import com.pbungert.geoimport.ui.map.TrackMap
 import kotlinx.coroutines.launch
 import java.io.File
@@ -113,6 +114,20 @@ internal fun JobScreen(
         .filter { active?.contains(it.name) ?: true }
         .map { DisplayTrack(it.name, it.track) }
 
+    // Where each photo is going, or went - the quickest check that the
+    // positions are right is seeing the beach photos at the beach.
+    val photos = remember(phase) {
+        when (phase) {
+            is Phase.Planned -> phase.plan.entries.mapNotNull { entry ->
+                entry.fix?.let {
+                    PhotoPin(entry.source, it.lat, it.lon, entry.captureTime, dimmed = !entry.selected)
+                }
+            }
+            is Phase.Done -> phase.summary.placed
+            else -> emptyList()
+        }
+    }
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
@@ -139,6 +154,7 @@ internal fun JobScreen(
                     shown,
                     modifier = Modifier.fillMaxSize(),
                     onExpand = { fullscreen = true },
+                    photos = photos,
                 )
                 if (shown.isEmpty()) {
                     Surface(
@@ -205,7 +221,7 @@ internal fun JobScreen(
     }
 
     if (fullscreen) {
-        FullscreenTrackMapDialog(shown) { fullscreen = false }
+        FullscreenTrackMapDialog(shown, photos) { fullscreen = false }
     }
     if (showSettings) {
         ImportSettingsSheet(
