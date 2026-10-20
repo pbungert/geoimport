@@ -167,7 +167,8 @@ The import and placing screens show each photo as a thumbnail on the map, at
 the position it will get, and on the summary at the position it got. Nearby
 photos share a thumbnail with a count until you zoom in, and tapping one shows
 its name and time. Thumbnails come from the preview the camera embedded, so
-RAW files show without being decoded.
+RAW files show without being decoded, and keep the photo's own proportions:
+the black bars a camera puts around a 3:2 photo in its 4:3 preview are cut off.
 
 The app uses the `drive.file` scope, so it sees only files it created. On a
 PC, Google Drive for Desktop mirrors the folder, and

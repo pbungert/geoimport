@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -57,6 +58,7 @@ import java.time.format.FormatStyle
 import java.util.Collections
 import kotlin.math.abs
 import kotlin.math.floor
+import kotlin.math.roundToInt
 
 /**
  * A photo at the position it was, or is about to be, tagged with. Shown on the
@@ -72,8 +74,11 @@ data class PhotoPin(
     val dimmed: Boolean = false,
 )
 
-/** The side of a thumbnail on the map, and the spacing they keep from each other. */
-private val THUMB_SIZE = 40.dp
+/**
+ * The square a thumbnail fits inside, on the map and in the import list, and
+ * the spacing they keep from each other on the map.
+ */
+internal val THUMB_SIZE = 40.dp
 
 /** Between a thumbnail and the point it stands for, so the dot under it stays visible. */
 private val THUMB_GAP = 6.dp
@@ -85,13 +90,13 @@ private val PREVIEW_SIZE = 120.dp
 private val VIDEO_EXTENSIONS = setOf("mov", "mp4")
 
 /**
- * Small square previews of photos, cut from the thumbnail the camera already
- * embedded where there is one. Decoding the full image of a 40 MB RAF to show
- * it at 40dp would take longer than reading the whole card did.
+ * Small previews of photos in their own proportions, taken from the thumbnail
+ * the camera already embedded where there is one. Decoding the full image of a
+ * 40 MB RAF to show it at 40dp would take longer than reading the whole card did.
  */
 internal object PhotoThumbnails {
 
-    /** Big enough for the enlarged preview, which is the larger of the two uses. */
+    /** The long side; big enough for the enlarged preview, the largest of the uses. */
     private const val SIZE_PX = 256
 
     // An eighth of what the app may use, the usual share for a bitmap cache.
@@ -128,9 +133,10 @@ internal object PhotoThumbnails {
             val retriever = MediaMetadataRetriever()
             return try {
                 retriever.setDataSource(file.path)
+                // Scaled to fit inside the box, so it keeps the video's proportions.
                 retriever.getScaledFrameAtTime(
                     0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, SIZE_PX, SIZE_PX,
-                )?.let { square(it, 0) }
+                )?.let { upright(it, 0, aspect = null) }
             } finally {
                 retriever.release()
             }
@@ -138,32 +144,60 @@ internal object PhotoThumbnails {
         val exif = ExifInterface(file)
         // The embedded thumbnail is stored as shot; the orientation tag is
         // what turns it the right way up, same as for the full image.
-        exif.thumbnailBitmap?.let { return square(it, exif.rotationDegrees) }
+        exif.thumbnailBitmap?.let { return upright(it, exif.rotationDegrees, storedAspect(exif)) }
         if (file.extension.lowercase() !in setOf("jpg", "jpeg")) return null
-        return sampledJpeg(file)?.let { square(it, exif.rotationDegrees) }
+        return sampledJpeg(file)?.let { upright(it, exif.rotationDegrees, aspect = null) }
     }
 
     /** A JPEG without an EXIF thumbnail, decoded at the smallest scale still big enough. */
     private fun sampledJpeg(file: File): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.path, bounds)
-        val shortSide = minOf(bounds.outWidth, bounds.outHeight)
-        if (shortSide <= 0) return null
+        val longSide = maxOf(bounds.outWidth, bounds.outHeight)
+        if (longSide <= 0) return null
         var sample = 1
-        while (shortSide / (sample * 2) >= SIZE_PX) sample *= 2
+        while (longSide / (sample * 2) >= SIZE_PX) sample *= 2
         return BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
     }
 
-    /** The centre square of [source], turned upright and no bigger than [SIZE_PX]. */
-    private fun square(source: Bitmap, rotation: Int): Bitmap {
-        val side = minOf(source.width, source.height)
-        val scale = minOf(1f, SIZE_PX.toFloat() / side)
+    /** Width over height of the full image as stored, before turning, if the EXIF says. */
+    private fun storedAspect(exif: ExifInterface): Float? {
+        fun ratio(widthTag: String, heightTag: String): Float? {
+            val width = exif.getAttributeInt(widthTag, 0)
+            val height = exif.getAttributeInt(heightTag, 0)
+            return if (width > 0 && height > 0) width.toFloat() / height else null
+        }
+        return ratio(ExifInterface.TAG_PIXEL_X_DIMENSION, ExifInterface.TAG_PIXEL_Y_DIMENSION)
+            ?: ratio(ExifInterface.TAG_IMAGE_WIDTH, ExifInterface.TAG_IMAGE_LENGTH)
+    }
+
+    /**
+     * [source] turned upright, its long side no bigger than [SIZE_PX].
+     *
+     * Cameras embed a 4:3 thumbnail whatever the photo, with black bars above
+     * and below a 3:2 one; cutting it to the photo's [aspect] takes the bars
+     * off. Only when both lie the same way, though - an aspect that disagrees
+     * on which side is longer is not describing this thumbnail, and cutting to
+     * it would leave a sliver.
+     */
+    private fun upright(source: Bitmap, rotation: Int, aspect: Float?): Bitmap {
+        var width = source.width
+        var height = source.height
+        val own = width.toFloat() / height
+        if (aspect != null && (aspect - 1) * (own - 1) >= 0) {
+            if (aspect > own) {
+                height = (width / aspect).roundToInt().coerceIn(1, height)
+            } else {
+                width = (height * aspect).roundToInt().coerceIn(1, width)
+            }
+        }
+        val scale = minOf(1f, SIZE_PX.toFloat() / maxOf(width, height))
         val matrix = Matrix().apply {
             postScale(scale, scale)
             if (rotation != 0) postRotate(rotation.toFloat())
         }
         return Bitmap.createBitmap(
-            source, (source.width - side) / 2, (source.height - side) / 2, side, side, matrix, true,
+            source, (source.width - width) / 2, (source.height - height) / 2, width, height, matrix, true,
         )
     }
 }
@@ -260,7 +294,9 @@ internal fun PhotoThumbnailOverlay(
                         .anchoredAbove(group.at, THUMB_GAP)
                         .clickable { onSelect(group.lead) },
                 ) {
-                    Thumbnail(group.lead, THUMB_SIZE)
+                    // Fits inside THUMB_SIZE whatever its shape, so the
+                    // spacing declutter keeps still stops them overlapping.
+                    PhotoThumbnail(group.lead.file, THUMB_SIZE, dimmed = group.lead.dimmed)
                     if (group.count > 1) {
                         Surface(
                             shape = CircleShape,
@@ -304,7 +340,9 @@ private fun SelectedPhoto(pin: PhotoPin, modifier: Modifier = Modifier) {
         modifier = modifier,
     ) {
         Column(modifier = Modifier.width(PREVIEW_SIZE + 12.dp).padding(6.dp)) {
-            Thumbnail(pin, PREVIEW_SIZE, framed = false)
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth()) {
+                PhotoThumbnail(pin.file, PREVIEW_SIZE, dimmed = pin.dimmed, framed = false)
+            }
             Text(
                 pin.file.name,
                 style = MaterialTheme.typography.labelMedium,
@@ -322,42 +360,53 @@ private fun SelectedPhoto(pin: PhotoPin, modifier: Modifier = Modifier) {
 }
 
 /**
- * One photo as a square. Shows a placeholder until the image is read, and for
- * good when there is nothing to read - a CR3 has no thumbnail this can find.
+ * One photo in its own proportions, its long side filling [box] - the same
+ * picture on the map and in the import list. Shows a square placeholder until
+ * the image is read, and for good when there is nothing to read - a CR3 has no
+ * thumbnail this can find.
  */
 @Composable
-private fun Thumbnail(pin: PhotoPin, size: Dp, framed: Boolean = true) {
-    val image by produceState(PhotoThumbnails.cached(pin.file), pin.file) {
-        if (value == null) value = PhotoThumbnails.load(pin.file)
+internal fun PhotoThumbnail(file: File, box: Dp, dimmed: Boolean = false, framed: Boolean = true) {
+    val image by produceState(PhotoThumbnails.cached(file), file) {
+        if (value == null) value = PhotoThumbnails.load(file)
     }
     val frame = if (framed) {
         Modifier.shadow(3.dp, THUMB_SHAPE).border(2.dp, Color.White, THUMB_SHAPE)
     } else {
         Modifier
     }
+    val shown = image
+    val sized = when {
+        shown == null -> Modifier.size(box)
+        shown.width >= shown.height -> Modifier.size(box, box * (shown.height.toFloat() / shown.width))
+        else -> Modifier.size(box * (shown.width.toFloat() / shown.height), box)
+    }
     Box(
         contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(size)
+        modifier = sized
             .then(frame)
             .clip(THUMB_SHAPE)
             .background(Color(0xFFE0E0E0)),
     ) {
-        val alpha = if (pin.dimmed) 0.4f else 1f
-        image?.let {
+        val alpha = if (dimmed) 0.4f else 1f
+        if (shown != null) {
             Image(
-                it,
-                contentDescription = pin.file.name,
+                shown,
+                contentDescription = file.name,
+                // The box already has the photo's proportions; this only
+                // swallows the rounding, rather than leaving a grey hairline.
                 contentScale = ContentScale.Crop,
                 alpha = alpha,
                 modifier = Modifier.fillMaxSize().padding(if (framed) 2.dp else 0.dp).clip(THUMB_SHAPE),
             )
-        } ?: Icon(
-            if (pin.file.extension.lowercase() in VIDEO_EXTENSIONS) Icons.Filled.Videocam else Icons.Filled.Photo,
-            contentDescription = pin.file.name,
-            tint = Color(0xFF757575).copy(alpha = alpha),
-            modifier = Modifier.size(size / 2),
-        )
+        } else {
+            Icon(
+                if (file.extension.lowercase() in VIDEO_EXTENSIONS) Icons.Filled.Videocam else Icons.Filled.Photo,
+                contentDescription = file.name,
+                tint = Color(0xFF757575).copy(alpha = alpha),
+                modifier = Modifier.size(box / 2),
+            )
+        }
     }
 }
 
