@@ -64,6 +64,8 @@ import com.pbungert.geoimport.core.imports.PlannedFile
 import com.pbungert.geoimport.ui.map.DisplayTrack
 import com.pbungert.geoimport.ui.map.FullscreenTrackMapDialog
 import com.pbungert.geoimport.ui.map.PhotoPin
+import com.pbungert.geoimport.ui.map.PhotoThumbnail
+import com.pbungert.geoimport.ui.map.THUMB_SIZE
 import com.pbungert.geoimport.ui.map.TrackMap
 import kotlinx.coroutines.launch
 import java.io.File
@@ -398,7 +400,7 @@ private fun TypeChips(types: List<ImportPlan.TypeCount>, onToggle: (String, Bool
     }
 }
 
-/** One file in a plan: when it was taken, and whether it gets a position. */
+/** One file in a plan: what it shows, when it was taken, and whether it gets a position. */
 @Composable
 private fun PlanEntryRow(
     entry: PlannedFile,
@@ -417,6 +419,13 @@ private fun PlanEntryRow(
             checked = entry.selected,
             onCheckedChange = { onToggle(entry.source, it) },
         )
+        // A fixed square, so the names line up whichever way the photo lies.
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.padding(end = 12.dp).size(THUMB_SIZE),
+        ) {
+            PhotoThumbnail(entry.source, THUMB_SIZE, dimmed = !entry.selected)
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 entry.source.name,
