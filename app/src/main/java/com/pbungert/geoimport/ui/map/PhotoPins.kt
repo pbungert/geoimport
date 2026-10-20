@@ -94,7 +94,9 @@ internal object PhotoThumbnails {
     /** Big enough for the enlarged preview, which is the larger of the two uses. */
     private const val SIZE_PX = 256
 
-    private val cache = object : LruCache<String, ImageBitmap>(24 * 1024 * 1024) {
+    // An eighth of what the app may use, the usual share for a bitmap cache.
+    // A whole card never fits, and one that drops out is only a re-read away.
+    private val cache = object : LruCache<String, ImageBitmap>((Runtime.getRuntime().maxMemory() / 8).toInt()) {
         override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
     }
 
